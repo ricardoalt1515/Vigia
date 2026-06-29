@@ -1,0 +1,22 @@
+# Go
+/bin/
+vigia
+*.exe
+*.test
+*.out
+
+# Node / Next.js (apps/console)
+node_modules/
+dist/
+.next/
+
+# Env & misc
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage/
+/data/synthetic/*.audio
+# Local Pi runtime state
+.atl/

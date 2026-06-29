@@ -31,6 +31,7 @@ guardrails, evidence, observability), making it a genuine flagship portfolio pro
 
 | Doc | Purpose |
 |-----|---------|
+| [HANDOFF.md](HANDOFF.md) | **Resume here** — session handoff: state, decisions, issues, next step |
 | [docs/PRD.md](docs/PRD.md) | Product Requirements — problem, market, ICP, modules, features, scope |
 | [docs/regulatory-ruleset.md](docs/regulatory-ruleset.md) | The REDECO/CONDUSEF executable ruleset (product core / moat seed) |
 | [docs/architecture.md](docs/architecture.md) | System architecture, agentic-stack mapping, tech stack |
