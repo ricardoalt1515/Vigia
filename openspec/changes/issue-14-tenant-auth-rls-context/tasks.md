@@ -9,17 +9,17 @@
 | Chained PRs recommended | Yes |
 | Suggested split | PR 1 → PR 2 → PR 3 |
 | Delivery strategy | ask-on-risk |
-| Chain strategy | pending |
+| Chain strategy | stacked-to-main |
 
-Decision needed before apply: Yes
+Decision needed before apply: No
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: stacked-to-main
 400-line budget risk: High
 
 ## Blockers / stop conditions
 
-- [ ] Wait until issue #13 is stable/verified and the other agent's changes are settled.
-- [ ] Reconfirm the final #13 shape before coding: `tenant_api_keys` hash/status/expiry columns, `interaction_events` columns, runtime DB role, and seed entrypoint.
+- [x] Wait until issue #13 is stable/verified and the other agent's changes are settled.
+- [x] Reconfirm the final #13 shape before coding: `tenant_api_keys` hash/status/expiry columns, `interaction_events` columns, runtime DB role, and seed entrypoint.
 - [ ] Stop immediately if scope starts widening into frontend, #1 console walking skeleton, River, Harness, MCP, detectors, evidence ledger, or dashboards.
 - [ ] Do not start apply if any #13 schema or sqlc output is still moving.
 
@@ -40,17 +40,17 @@ Chain strategy: pending
 
 ## PR 2 — minimal protected endpoint + RLS proof
 
-- [ ] RED: add `GET /v1/interactions` handler tests in `internal/httpapi` for `401` on unauthorized credentials and `200` for a valid tenant key with seeded rows.
+- [x] RED: add `GET /v1/interactions` handler tests in `internal/httpapi` for `401` on unauthorized credentials and `200` for a valid tenant key with seeded rows.
   - Verification: `go test ./internal/httpapi -run TestGetInteractions -count=1`
-- [ ] GREEN: wire the minimal protected route in `cmd/api` and `internal/httpapi` so the endpoint returns only the authenticated tenant's minimal list shape.
+- [x] GREEN: wire the minimal protected route in `cmd/api` and `internal/httpapi` so the endpoint returns only the authenticated tenant's minimal list shape.
   - Verification: `go test ./internal/httpapi ./cmd/api -run TestGetInteractions -count=1`
-- [ ] REFACTOR: keep the route thin; no pagination, filters, detail view, dashboard logic, or frontend coupling.
+- [x] REFACTOR: keep the route thin; no pagination, filters, detail view, dashboard logic, or frontend coupling.
   - Verification: `go test ./internal/httpapi ./cmd/api -run TestGetInteractions -count=1`
-- [ ] RED: add an integration test proving tenant A cannot read tenant B rows when the protected query omits an explicit `tenant_id` predicate.
+- [x] RED: add an integration test proving tenant A cannot read tenant B rows when the protected query omits an explicit `tenant_id` predicate.
   - Verification: `go test ./... -run TestRLSIsolation -count=1`
-- [ ] GREEN: implement the RLS-backed read path in `db/queries` and the adapter layer so protected reads rely on transaction context, not app-layer tenant filters.
+- [x] GREEN: implement the RLS-backed read path in `db/queries` and the adapter layer so protected reads rely on transaction context, not app-layer tenant filters.
   - Verification: `go test ./... -run TestRLSIsolation -count=1`
-- [ ] REFACTOR: validate the proof using the intended application runtime role, not migration-owner or superuser behavior.
+- [x] REFACTOR: validate the proof using the intended application runtime role, not migration-owner or superuser behavior.
   - Verification: `go test ./... -run TestRLSIsolation -count=1`
 
 ## PR 3 — local key issuance / seed support

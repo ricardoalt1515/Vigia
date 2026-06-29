@@ -22,11 +22,7 @@ var tenantScopedTables = []string{
 }
 
 func TestMigrationPreservesTenantScopedParentChildIntegrity(t *testing.T) {
-	migrationSQL, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "00001_initial_foundation.sql"))
-	if err != nil {
-		t.Fatalf("read initial migration: %v", err)
-	}
-	migration := string(migrationSQL)
+	migration := readInitialMigration(t)
 
 	relationships := []struct {
 		name        string
@@ -67,6 +63,30 @@ func TestMigrationPreservesTenantScopedParentChildIntegrity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTenantAPIKeyPoliciesSupportLookupAndTenantIsolation(t *testing.T) {
+	migration := readInitialMigration(t)
+
+	for _, required := range []string{
+		"CREATE POLICY tenant_api_keys_tenant_isolation ON tenant_api_keys",
+		"tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid",
+		"CREATE POLICY tenant_api_keys_hash_lookup ON tenant_api_keys",
+		"key_hash = nullif(current_setting('app.api_key_hash', true), '')",
+	} {
+		if !strings.Contains(migration, required) {
+			t.Fatalf("migration missing tenant_api_keys policy fragment %q", required)
+		}
+	}
+}
+
+func readInitialMigration(t *testing.T) string {
+	t.Helper()
+	migrationSQL, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "00001_initial_foundation.sql"))
+	if err != nil {
+		t.Fatalf("read initial migration: %v", err)
+	}
+	return string(migrationSQL)
 }
 
 func createTableBlock(t *testing.T, migration, table string) string {

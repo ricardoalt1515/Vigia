@@ -8,3 +8,9 @@ SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transc
 FROM interaction_events
 WHERE tenant_id = $1
 ORDER BY occurred_at DESC;
+
+-- name: ListCurrentTenantInteractions :many
+SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, created_at
+FROM interaction_events
+ORDER BY occurred_at DESC
+LIMIT $1;

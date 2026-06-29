@@ -52,6 +52,43 @@ func (q *Queries) CreateInteractionEvent(ctx context.Context, arg CreateInteract
 	return i, err
 }
 
+const listCurrentTenantInteractions = `-- name: ListCurrentTenantInteractions :many
+SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, created_at
+FROM interaction_events
+ORDER BY occurred_at DESC
+LIMIT $1
+`
+
+func (q *Queries) ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]InteractionEvent, error) {
+	rows, err := q.db.Query(ctx, listCurrentTenantInteractions, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InteractionEvent
+	for rows.Next() {
+		var i InteractionEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.DebtorID,
+			&i.Channel,
+			&i.Direction,
+			&i.Status,
+			&i.OccurredAt,
+			&i.TranscriptRef,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInteractionEventsByTenant = `-- name: ListInteractionEventsByTenant :many
 SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, created_at
 FROM interaction_events

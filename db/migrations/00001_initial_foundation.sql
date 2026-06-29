@@ -100,6 +100,8 @@ ALTER TABLE detector_result_rows ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_api_keys_tenant_isolation ON tenant_api_keys
     USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY tenant_api_keys_hash_lookup ON tenant_api_keys
+    USING (key_hash = nullif(current_setting('app.api_key_hash', true), ''));
 CREATE POLICY debtors_tenant_isolation ON debtors
     USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY interaction_events_tenant_isolation ON interaction_events

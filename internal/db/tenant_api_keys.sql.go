@@ -47,6 +47,28 @@ func (q *Queries) CreateTenantAPIKey(ctx context.Context, arg CreateTenantAPIKey
 	return i, err
 }
 
+const getTenantAPIKeyByHash = `-- name: GetTenantAPIKeyByHash :one
+SELECT id, tenant_id, key_hash, label, status, created_at, expires_at, last_used_at
+FROM tenant_api_keys
+WHERE key_hash = $1
+`
+
+func (q *Queries) GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error) {
+	row := q.db.QueryRow(ctx, getTenantAPIKeyByHash, keyHash)
+	var i TenantApiKey
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.KeyHash,
+		&i.Label,
+		&i.Status,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.LastUsedAt,
+	)
+	return i, err
+}
+
 const listTenantAPIKeysByTenant = `-- name: ListTenantAPIKeysByTenant :many
 SELECT id, tenant_id, key_hash, label, status, created_at, expires_at, last_used_at
 FROM tenant_api_keys
