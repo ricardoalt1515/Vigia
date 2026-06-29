@@ -66,10 +66,10 @@ All tasks in this work unit are strictly sequential. Tests use a fake `SeedQueri
 
 Within this work unit, T2.2–T2.3 (migration) and T2.4–T2.7 (noop unit tests) are independent of each other and can run in parallel after T2.1 is complete. T2.8 (main.go wiring) requires both tracks done. T2.9 (integration) requires T2.8.
 
-- [ ] **T2.1** [setup · blocking] Resolve latest stable River v0.x tag at apply time. Run `go get github.com/riverqueue/river@<tag>` and `go get github.com/riverqueue/river/riverdriver/riverpgxv5@<tag>` using the same tag. Run `go mod tidy`. Verify `go build ./...` succeeds. Record the resolved tag in apply-progress for the migration step.
+- [x] **T2.1** [setup · blocking] Resolve latest stable River v0.x tag at apply time. Run `go get github.com/riverqueue/river@<tag>` and `go get github.com/riverqueue/river/riverdriver/riverpgxv5@<tag>` using the same tag. Run `go mod tidy`. Verify `go build ./...` succeeds. Record the resolved tag in apply-progress for the migration step.
   - Verification: `go build ./...`
 
-- [ ] **T2.2** [migration · parallel-after-T2.1] Generate River's canonical schema SQL using the pinned tag:
+- [x] **T2.2** [migration · parallel-after-T2.1] Generate River's canonical schema SQL using the pinned tag:
   ```
   go run github.com/riverqueue/river/cmd/river@<tag> migrate-get --line main --up   --all > /tmp/river_up.sql
   go run github.com/riverqueue/river/cmd/river@<tag> migrate-get --line main --down --all > /tmp/river_down.sql
@@ -79,23 +79,24 @@ Within this work unit, T2.2–T2.3 (migration) and T2.4–T2.7 (noop unit tests)
 
 - [ ] **T2.3** [migration verification · sequential-after-T2.2] Run `make migrate-up` against a local Postgres. Verify all River-required tables exist. Run `make migrate-down`. Verify tables are removed. Confirm round-trip is clean (exit code 0 both directions). Document the outcome in apply-progress.
   - Verification: `make migrate-up && make migrate-down` (manual; exit 0 both)
+  - **BLOCKED**: Postgres not running in apply environment. Run `make dev` first, then execute this step manually.
 
-- [ ] **T2.4** [test-first · RED · parallel-after-T2.1] Write `cmd/worker/noop_test.go` with unit test `TestNoopJobKind`: assert `NoopJob{}.Kind() == "noop"`. Expect test to fail (file does not exist yet).
+- [x] **T2.4** [test-first · RED · parallel-after-T2.1] Write `cmd/worker/noop_test.go` with unit test `TestNoopJobKind`: assert `NoopJob{}.Kind() == "noop"`. Expect test to fail (file does not exist yet).
   - Verification: `go test ./cmd/worker -run TestNoopJobKind -count=1`
 
-- [ ] **T2.5** [GREEN] Create `cmd/worker/noop.go`. Define `NoopJob struct{}` implementing `river.JobArgs` with `Kind() string { return "noop" }`.
+- [x] **T2.5** [GREEN] Create `cmd/worker/noop.go`. Define `NoopJob struct{}` implementing `river.JobArgs` with `Kind() string { return "noop" }`.
   - Verification: `go test ./cmd/worker -run TestNoopJobKind -count=1`
 
-- [ ] **T2.6** [test-first · RED] Add unit test `TestNoopWorkerWork` to `noop_test.go`: assert `(&NoopWorker{}).Work(ctx, &river.Job[NoopJob]{}) == nil`. Verify `Work` never calls any detector, Harness, Judge, MCP, or domain behavior (white-box assertion: only `return nil` in body). Expect test to fail (NoopWorker not defined yet).
+- [x] **T2.6** [test-first · RED] Add unit test `TestNoopWorkerWork` to `noop_test.go`: assert `(&NoopWorker{}).Work(ctx, &river.Job[NoopJob]{}) == nil`. Verify `Work` never calls any detector, Harness, Judge, MCP, or domain behavior (white-box assertion: only `return nil` in body). Expect test to fail (NoopWorker not defined yet).
   - Verification: `go test ./cmd/worker -run TestNoopWorkerWork -count=1`
 
-- [ ] **T2.7** [GREEN] Add `NoopWorker struct{ river.WorkerDefaults[NoopJob] }` to `cmd/worker/noop.go`. Implement `func (NoopWorker) Work(ctx context.Context, job *river.Job[NoopJob]) error { return nil }`. No domain imports.
+- [x] **T2.7** [GREEN] Add `NoopWorker struct{ river.WorkerDefaults[NoopJob] }` to `cmd/worker/noop.go`. Implement `func (NoopWorker) Work(ctx context.Context, job *river.Job[NoopJob]) error { return nil }`. No domain imports.
   - Verification: `go test ./cmd/worker -run TestNoopWorkerWork -count=1`
 
-- [ ] **T2.8** [sequential-after-T2.3+T2.7] Create `cmd/worker/main.go`. Implement `run(ctx)`: load config, open `pgxpool` over `cfg.DatabaseURL`, create `river.NewWorkers()`, `river.AddWorker(workers, &NoopWorker{})`, `river.NewClient(riverpgxv5.New(pool), &river.Config{Queues: ..., Workers: workers})`, `client.Insert(ctx, NoopJob{}, nil)`, `client.Start(ctx)`, wait for `SIGINT`/`SIGTERM` via `signal.NotifyContext`, `client.Stop(shutdownCtx)`. Imports: `internal/config` + River only. Must NOT import `internal/httpapi`, `internal/auth`, or `internal/harness`.
+- [x] **T2.8** [sequential-after-T2.3+T2.7] Create `cmd/worker/main.go`. Implement `run(ctx)`: load config, open `pgxpool` over `cfg.DatabaseURL`, create `river.NewWorkers()`, `river.AddWorker(workers, &NoopWorker{})`, `river.NewClient(riverpgxv5.New(pool), &river.Config{Queues: ..., Workers: workers})`, `client.Insert(ctx, NoopJob{}, nil)`, `client.Start(ctx)`, wait for `SIGINT`/`SIGTERM` via `signal.NotifyContext`, `client.Stop(shutdownCtx)`. Imports: `internal/config` + River only. Must NOT import `internal/httpapi`, `internal/auth`, or `internal/harness`.
   - Verification: `go build ./cmd/worker` (compilation proof)
 
-- [ ] **T2.9** [integration · skippable · sequential-after-T2.8] Create `cmd/worker/worker_integration_test.go`. Guard with `testing.Short()` and `DATABASE_URL` present. Build a real River client against migrated Postgres. Insert one `NoopJob`. Call `Start`. Poll `river_job` table (or River completion subscription) until the job reaches `completed` state with a timeout. Assert completion. Call `Stop`. Confirm `Stop` returns without error.
+- [x] **T2.9** [integration · skippable · sequential-after-T2.8] Create `cmd/worker/worker_integration_test.go`. Guard with `testing.Short()` and `DATABASE_URL` present. Build a real River client against migrated Postgres. Insert one `NoopJob`. Call `Start`. Poll `river_job` table (or River completion subscription) until the job reaches `completed` state with a timeout. Assert completion. Call `Stop`. Confirm `Stop` returns without error.
   - Verification: `go test ./cmd/worker -run TestWorkerIntegration -count=1` (requires migrated DB)
 
 ---

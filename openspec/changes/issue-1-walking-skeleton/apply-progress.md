@@ -71,7 +71,60 @@ go test ./... -short -count=1 → all packages PASS
 
 ## Slice 2: River worker + goose migration (PR 2)
 
-**Status:** NOT STARTED
+**Status:** COMPLETE (T2.3 migration round-trip pending manual execution — Postgres not running in apply environment)
+**Branch:** issue-1-river-worker
+**Completed:** 2026-06-29
+**River version pinned:** v0.39.0
+
+### Tasks completed
+
+- [x] T2.1 SETUP: `go get github.com/riverqueue/river@v0.39.0` + `go get github.com/riverqueue/river/riverdriver/riverpgxv5@v0.39.0`; `go mod tidy`; `go build ./...` → exit 0
+- [x] T2.2 MIGRATION: `db/migrations/00002_river_tables.sql` created; SQL generated via `go run github.com/riverqueue/river/cmd/river@v0.39.0 migrate-get`; wrapped verbatim in `-- +goose Up / StatementBegin/End / -- +goose Down / StatementBegin/End`
+- [ ] T2.3 MIGRATION ROUND-TRIP: **PENDING** — requires `make dev` (Postgres not available in apply environment). User must run `make migrate-up && make migrate-down` to verify.
+- [x] T2.4 RED: `TestNoopJobKind` written and failing (NoopJob not defined yet)
+- [x] T2.5 GREEN: `cmd/worker/noop.go` created with `NoopJob` + `Kind() == "noop"`
+- [x] T2.6 RED: `TestNoopWorkerWork` written and failing (NoopWorker not defined yet)
+- [x] T2.7 GREEN: `NoopWorker` added to `cmd/worker/noop.go`; unit tests PASS
+- [x] T2.8 WIRING: `cmd/worker/main.go` created; imports only `internal/config` + River; `go build ./cmd/worker` → exit 0; no forbidden imports (`internal/httpapi`, `internal/auth`, `internal/harness` absent from dep graph)
+- [x] T2.9 INTEGRATION TEST: `cmd/worker/worker_integration_test.go` added; skips on `-short` or missing `DATABASE_URL`
+
+### Files created / modified
+
+| File | Action |
+|------|--------|
+| `cmd/worker/noop.go` | Created — `NoopJob` (river.JobArgs), `NoopWorker` (river.WorkerDefaults[NoopJob]) |
+| `cmd/worker/noop_test.go` | Created — `TestNoopJobKind`, `TestNoopWorkerWork` |
+| `cmd/worker/main.go` | Created — `run(ctx)`: config → pool → River client → insert NoopJob → start → graceful shutdown |
+| `cmd/worker/worker_integration_test.go` | Created — `TestWorkerIntegration` (skippable; polls river_job until completed) |
+| `db/migrations/00002_river_tables.sql` | Created — River v0.39.0 schema wrapped in goose markers |
+| `go.mod` | Modified — added river v0.39.0, riverpgxv5 v0.39.0, and transitive deps |
+| `go.sum` | Modified — updated for River v0.39.0 and pgx v5.9.2 upgrade |
+
+### Verification output
+
+```
+=== RUN   TestNoopJobKind
+--- PASS: TestNoopJobKind (0.00s)
+=== RUN   TestNoopWorkerWork
+--- PASS: TestNoopWorkerWork (0.00s)
+=== RUN   TestWorkerIntegration
+    worker_integration_test.go:24: DATABASE_URL is required for the River integration test
+--- SKIP: TestWorkerIntegration (0.00s)
+PASS
+ok  github.com/ricardoalt1515/vigia/cmd/worker 0.321s
+
+go build ./... → exit 0
+go vet ./cmd/worker → exit 0
+go test ./... -short -count=1 → all packages PASS
+```
+
+### Design decisions applied
+
+- **River version v0.39.0**: latest stable v0.x tag; both `river` and `riverpgxv5` pinned to same tag; `riverpgxv5` added as direct dep.
+- **Migration generated, not hand-authored**: `migrate-get --line main --up --all` and `--down --all` output captured verbatim; goose `StatementBegin/End` wraps the entire block (matches existing `00001_initial_foundation.sql` pattern).
+- **No rivermigrate at startup**: `cmd/worker/main.go` calls no migration code; `make migrate-up` is the single migration path.
+- **Process isolation enforced**: `go list -deps ./cmd/worker | grep internal/(httpapi|auth|harness)` returns nothing.
+- **pgx upgraded**: River v0.39.0 requires pgx v5.9.2; `go get` upgraded it from v5.7.5 automatically.
 
 ## Slice 3: Next.js console + Makefile targets (PR 3)
 
