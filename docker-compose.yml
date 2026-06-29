@@ -16,7 +16,8 @@ services:
       timeout: 3s
       retries: 10
 
-  # S3-compatible object storage with Object Lock (WORM) for audio evidence.
+  # S3-compatible local object storage for readiness only; #13 does not
+  # enforce Object Lock, bucket lifecycle, audio evidence, or WORM semantics.
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -24,10 +25,19 @@ services:
       MINIO_ROOT_USER: vigia
       MINIO_ROOT_PASSWORD: vigia-secret
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # console
+      - "9000:9000" # S3 API
+      - "9001:9001" # console
     volumes:
       - miniodata:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -f http://localhost:9000/minio/health/live || exit 1",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   pgdata:

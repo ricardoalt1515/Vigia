@@ -1,35 +1,44 @@
-.PHONY: dev down logs migrate-up migrate-down sqlc test seed api worker tidy
+.PHONY: dev down logs tools migrate-up migrate-down sqlc test tidy
+
+DATABASE_URL ?= postgres://vigia:vigia@localhost:5432/vigia?sslmode=disable
+TOOL_BIN := $(CURDIR)/bin
+GOOSE := $(TOOL_BIN)/goose
+SQLC := $(TOOL_BIN)/sqlc
+GOOSE_TOOL := github.com/pressly/goose/v3/cmd/goose
+SQLC_TOOL := github.com/sqlc-dev/sqlc/cmd/sqlc
 
 # --- local dev stack ---
 dev: ## start Postgres + MinIO
-	docker compose up -d
+	docker compose up -d postgres minio
 	@echo "Postgres :5432  ·  MinIO :9000 (console :9001)"
 
 down: ## stop the stack
 	docker compose down
 
-logs:
-	docker compose logs -f
+logs: ## stream local dependency logs
+	docker compose logs -f postgres minio
+
+# --- tools ---
+tools: $(GOOSE) $(SQLC) ## install pinned goose and sqlc into ./bin
+
+$(TOOL_BIN):
+	mkdir -p $(TOOL_BIN)
+
+$(GOOSE): go.mod go.sum | $(TOOL_BIN)
+	GOBIN=$(TOOL_BIN) go install $(GOOSE_TOOL)
+
+$(SQLC): go.mod go.sum | $(TOOL_BIN)
+	GOBIN=$(TOOL_BIN) go install $(SQLC_TOOL)
 
 # --- database ---
-migrate-up: ## apply goose migrations
-	goose -dir db/migrations postgres "$$DATABASE_URL" up
+migrate-up: $(GOOSE) ## apply goose migrations
+	$(GOOSE) -dir db/migrations postgres "$(DATABASE_URL)" up
 
-migrate-down: ## roll back one goose migration
-	goose -dir db/migrations postgres "$$DATABASE_URL" down
+migrate-down: $(GOOSE) ## roll back one goose migration
+	$(GOOSE) -dir db/migrations postgres "$(DATABASE_URL)" down
 
-sqlc: ## regenerate type-safe queries
-	sqlc generate
-
-# --- app ---
-seed: ## load synthetic es-MX dataset
-	go run ./cmd/seed
-
-api: ## run the HTTP API
-	go run ./cmd/api
-
-worker: ## run the River worker
-	go run ./cmd/worker
+sqlc: $(SQLC) ## regenerate type-safe queries
+	$(SQLC) generate
 
 # --- quality ---
 test:
