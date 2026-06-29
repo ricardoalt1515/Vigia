@@ -1,0 +1,137 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ricardoalt1515/vigia/internal/auth"
+	"github.com/ricardoalt1515/vigia/internal/config"
+	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
+)
+
+const tenantAPIKeyPrefix = "vigia_tenant_"
+const randomKeyBytes = 32
+
+type CreateTenantAPIKeyParams struct {
+	TenantID string
+	KeyHash  string
+	Label    string
+	Status   string
+}
+
+type TenantAPIKeyCreator interface {
+	CreateTenantAPIKey(ctx context.Context, params CreateTenantAPIKeyParams) error
+}
+
+type IssueTenantAPIKeyParams struct {
+	TenantID string
+	Label    string
+}
+
+type IssuedTenantAPIKey struct {
+	PlaintextKey string
+}
+
+func IssueTenantAPIKey(ctx context.Context, store TenantAPIKeyCreator, params IssueTenantAPIKeyParams) (IssuedTenantAPIKey, error) {
+	if params.TenantID == "" {
+		return IssuedTenantAPIKey{}, errors.New("tenant id is required")
+	}
+	if params.Label == "" {
+		return IssuedTenantAPIKey{}, errors.New("label is required")
+	}
+
+	plaintext, err := generateTenantAPIKey()
+	if err != nil {
+		return IssuedTenantAPIKey{}, err
+	}
+	if err := store.CreateTenantAPIKey(ctx, CreateTenantAPIKeyParams{
+		TenantID: params.TenantID,
+		KeyHash:  auth.HashAPIKey(plaintext),
+		Label:    params.Label,
+		Status:   auth.StatusActive,
+	}); err != nil {
+		return IssuedTenantAPIKey{}, err
+	}
+	return IssuedTenantAPIKey{PlaintextKey: plaintext}, nil
+}
+
+func generateTenantAPIKey() (string, error) {
+	buf := make([]byte, randomKeyBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return tenantAPIKeyPrefix + base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+type postgresTenantAPIKeyCreator struct {
+	queries *vigiaDB.Queries
+}
+
+func (s postgresTenantAPIKeyCreator) CreateTenantAPIKey(ctx context.Context, params CreateTenantAPIKeyParams) error {
+	tenantID, err := parseUUID(params.TenantID)
+	if err != nil {
+		return err
+	}
+	_, err = s.queries.CreateTenantAPIKey(ctx, vigiaDB.CreateTenantAPIKeyParams{
+		TenantID: tenantID,
+		KeyHash:  params.KeyHash,
+		Label:    params.Label,
+		Status:   params.Status,
+		ExpiresAt: pgtype.Timestamptz{
+			Valid: false,
+		},
+	})
+	return err
+}
+
+func parseUUID(value string) (pgtype.UUID, error) {
+	var uuid pgtype.UUID
+	if err := uuid.Scan(value); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("parse tenant id: %w", err)
+	}
+	return uuid, nil
+}
+
+func main() {
+	if err := run(context.Background(), os.Args[1:]); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("seed", flag.ContinueOnError)
+	tenantID := flags.String("tenant-id", "", "tenant UUID to issue an API key for")
+	label := flags.String("label", "local-dev", "tenant API key label")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		return err
+	}
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	issued, err := IssueTenantAPIKey(ctx, postgresTenantAPIKeyCreator{queries: vigiaDB.New(pool)}, IssueTenantAPIKeyParams{
+		TenantID: *tenantID,
+		Label:    *label,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("tenant_api_key=%s\n", issued.PlaintextKey)
+	return nil
+}

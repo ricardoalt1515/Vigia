@@ -20,8 +20,8 @@ Chain strategy: stacked-to-main
 
 - [x] Wait until issue #13 is stable/verified and the other agent's changes are settled.
 - [x] Reconfirm the final #13 shape before coding: `tenant_api_keys` hash/status/expiry columns, `interaction_events` columns, runtime DB role, and seed entrypoint.
-- [ ] Stop immediately if scope starts widening into frontend, #1 console walking skeleton, River, Harness, MCP, detectors, evidence ledger, or dashboards.
-- [ ] Do not start apply if any #13 schema or sqlc output is still moving.
+- [x] Stop immediately if scope starts widening into frontend, #1 console walking skeleton, River, Harness, MCP, detectors, evidence ledger, or dashboards.
+- [x] Do not start apply if any #13 schema or sqlc output is still moving.
 
 ## PR 1 — tenant auth + transaction-scoped context
 
@@ -55,16 +55,16 @@ Chain strategy: stacked-to-main
 
 ## PR 3 — local key issuance / seed support
 
-- [ ] RED: add tests in `cmd/seed` (or the smallest existing seed entrypoint) proving plaintext API keys are returned once and only the hash persists.
+- [x] RED: add tests in `cmd/seed` (or the smallest existing seed entrypoint) proving plaintext API keys are returned once and only the hash persists.
   - Verification: `go test ./cmd/seed -run TestIssueTenantAPIKey -count=1`
-- [ ] GREEN: implement high-entropy tenant API-key generation, hash persistence, and one-time plaintext output for local/demo tenant setup.
+- [x] GREEN: implement high-entropy tenant API-key generation, hash persistence, and one-time plaintext output for local/demo tenant setup.
   - Verification: `go test ./cmd/seed ./... -run TestIssueTenantAPIKey -count=1`
-- [ ] REFACTOR: keep the issuer boundary reusable and ensure plaintext never lands in logs, fixtures, errors, or snapshots.
+- [x] REFACTOR: keep the issuer boundary reusable and ensure plaintext never lands in logs, fixtures, errors, or snapshots.
   - Verification: `go test ./cmd/seed ./... -run TestIssueTenantAPIKey -count=1`
 
 ## Final validation
 
-- [ ] Run focused package tests for auth, transaction helper, HTTP, seed, and the RLS proof seam.
+- [x] Run focused package tests for auth, transaction helper, HTTP, seed, and the RLS proof seam.
   - Verification: `go test ./internal/auth ./internal/tenantdb ./internal/httpapi ./cmd/seed -count=1`
-- [ ] Run the broader suite only after #13 is stable and the worktree is clean.
+- [x] Run the broader suite only after #13 is stable and the worktree is clean.
   - Verification: `go test ./...`

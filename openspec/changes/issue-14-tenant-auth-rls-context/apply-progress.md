@@ -17,10 +17,11 @@ Implemented slices:
   with `SET LOCAL` semantics through `set_config(..., true)` inside the transaction.
 - PR 2: minimal protected `GET /v1/interactions` endpoint and RLS-backed
   current-tenant read path.
+- PR 3: local `cmd/seed` tenant API-key issuance with high-entropy plaintext
+  returned once and persisted hash-only storage.
 
 Not implemented in these slices:
 
-- PR 3 local key issuance / seed support.
 - Frontend, Harness, MCP, detectors, evidence ledger, dashboards, or River behavior.
 
 ## Completed tasks and persisted checkbox updates
@@ -54,6 +55,16 @@ The following PR 2 task checkboxes are marked complete in `tasks.md`:
 - REFACTOR: RLS proof is an integration test using the runtime connection when
   `DATABASE_URL` is provided; it skips safely when no database is available.
 
+The following PR 3 task checkboxes are marked complete in `tasks.md`:
+
+- RED: `cmd/seed` test proves plaintext tenant API keys are returned to the
+  caller while only hash material reaches the persistence seam.
+- GREEN: `cmd/seed` issues a high-entropy tenant API key, hashes it with the
+  existing auth hash function, and persists an active tenant API-key record.
+- REFACTOR: issuer behavior is behind a small store interface, and plaintext
+  key material is only printed by the CLI after persistence succeeds.
+- Final focused and broader validation tasks are marked complete after passing.
+
 ## TDD Cycle Evidence
 
 | Cycle | RED evidence | GREEN evidence | TRIANGULATE / REFACTOR evidence |
@@ -62,9 +73,12 @@ The following PR 2 task checkboxes are marked complete in `tasks.md`:
 | Tenant transaction context | `go test ./internal/tenantdb -run TestSetLocalTenantContext -count=1` failed with undefined `WithTenantTx`, `Tx`, and `setLocalTenantSQL`. | Added `internal/tenantdb/tenantdb.go`; focused tenantdb test passed. | Refactored beginner interface to `Begin(ctx)` so pgx pool/tx-style boundaries can adapt without repository indirection; re-ran focused and full suite. |
 | HTTP interactions endpoint | `go test ./internal/httpapi -run TestGetInteractions -count=1` failed with undefined `Interaction`, `NewServer`, and response types. | Added `internal/httpapi` server and tests; focused endpoint test passed. | Added `cmd/api` wiring with stdlib `net/http`; route remains a single minimal endpoint. |
 | RLS current-tenant read | `go test ./... -run TestRLSIsolation -count=1` failed with undefined `ListCurrentTenantInteractions` after the integration test was added. | Added no-explicit-tenant sqlc query and regenerated `internal/db`; RLS test compiles and skips safely without database URLs. | Added Postgres adapters for key-hash lookup and transaction-scoped interaction reads; auth lookup now uses a transaction-local `app.api_key_hash` setting instead of depending on tenant RLS before authentication. |
+| Key issuance / seed | `go test ./cmd/seed -run TestIssueTenantAPIKey -count=1` failed with undefined issuer types and constants. | Added `cmd/seed` issuer and CLI entrypoint; focused seed test passed. | Re-ran focused seed plus full package validation; issuer depends on a small store interface and persists only hash material. |
 
 ## Files changed
 
+- `cmd/seed/main.go`
+- `cmd/seed/main_test.go`
 - `cmd/api/main.go`
 - `db/queries/interaction_events.sql`
 - `db/queries/tenant_api_keys.sql`
@@ -90,6 +104,9 @@ The following PR 2 task checkboxes are marked complete in `tasks.md`:
 | `go test ./internal/httpapi -run TestGetInteractions -count=1` | Failed as RED, then passed | Endpoint behavior test failed before server code, then passed. |
 | `go test ./internal/httpapi ./cmd/api -run TestGetInteractions -count=1` | Passed | Endpoint package passed; `cmd/api` compiles with no package tests. |
 | `go test ./... -run TestRLSIsolation -count=1` | Failed as RED, then passed/skipped | Failed before current-tenant sqlc query existed; after implementation the integration test compiles and skips unless both `DATABASE_URL` and `APP_DATABASE_URL` are present. |
+| `go test ./cmd/seed -run TestIssueTenantAPIKey -count=1` | Failed as RED, then passed | Seed test failed before issuer code, then passed after implementation. |
+| `go test ./cmd/seed ./... -run TestIssueTenantAPIKey -count=1` | Passed | Seed package passed and broader packages compiled for the focused test name. |
+| `go test ./internal/auth ./internal/tenantdb ./internal/httpapi ./cmd/seed -count=1` | Passed | Focused final validation packages pass. |
 | `go test ./...` | Passed | Full Go suite passes for current packages. |
 | `git diff --check` | Passed | No whitespace errors in the current diff. |
 
@@ -108,23 +125,12 @@ The following PR 2 task checkboxes are marked complete in `tasks.md`:
 
 ## Remaining tasks
 
-Exact unchecked task lines remaining:
-
-```text
-- [ ] Stop immediately if scope starts widening into frontend, #1 console walking skeleton, River, Harness, MCP, detectors, evidence ledger, or dashboards.
-- [ ] Do not start apply if any #13 schema or sqlc output is still moving.
-- [ ] RED: add tests in `cmd/seed` (or the smallest existing seed entrypoint) proving plaintext API keys are returned once and only the hash persists.
-- [ ] GREEN: implement high-entropy tenant API-key generation, hash persistence, and one-time plaintext output for local/demo tenant setup.
-- [ ] REFACTOR: keep the issuer boundary reusable and ensure plaintext never lands in logs, fixtures, errors, or snapshots.
-- [ ] Run focused package tests for auth, transaction helper, HTTP, seed, and the RLS proof seam.
-- [ ] Run the broader suite only after #13 is stable and the worktree is clean.
-```
+No unchecked implementation tasks remain in `tasks.md` for issue #14.
 
 ## Risks / notes
 
-- PR 3 key issuance/seed support remains incomplete by design.
 - The live RLS proof requires `DATABASE_URL` for setup and `APP_DATABASE_URL`
   for runtime-role validation; without both, the integration test is skipped
   rather than mutating unavailable services.
 - There are pre-existing unrelated modified/untracked files in the worktree.
-  This slice only modified PR 2 code and issue #14 OpenSpec apply artifacts.
+  This slice only modified PR 3 code and issue #14 OpenSpec apply artifacts.
