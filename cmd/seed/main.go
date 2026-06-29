@@ -100,6 +100,24 @@ func parseUUID(value string) (pgtype.UUID, error) {
 	return uuid, nil
 }
 
+// defaultKeyIssuer adapts the free IssueTenantAPIKey function to the KeyIssuer interface.
+type defaultKeyIssuer struct {
+	store TenantAPIKeyCreator
+}
+
+func (d defaultKeyIssuer) IssueTenantAPIKey(ctx context.Context, params IssueTenantAPIKeyParams) (IssuedTenantAPIKey, error) {
+	return IssueTenantAPIKey(ctx, d.store, params)
+}
+
+// routeArgs inspects the first argument to determine the subcommand.
+// Returns "dev-data" when args[0] == "dev-data", otherwise "key-issuance".
+func routeArgs(args []string) string {
+	if len(args) > 0 && args[0] == "dev-data" {
+		return "dev-data"
+	}
+	return "key-issuance"
+}
+
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
 		log.Fatal(err)
@@ -107,6 +125,54 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	switch routeArgs(args) {
+	case "dev-data":
+		return runDevData(ctx, args[1:])
+	default:
+		return runKeyIssuance(ctx, args)
+	}
+}
+
+func runDevData(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("seed dev-data", flag.ContinueOnError)
+	slug := flags.String("slug", "demo-tenant", "tenant slug")
+	name := flags.String("name", "Demo Tenant", "tenant display name")
+	debtorRef := flags.String("debtor-ref", "debtor-001", "debtor external ref")
+	debtorName := flags.String("debtor-name", "Juana Pérez (demo)", "debtor display name")
+	label := flags.String("label", "local-dev", "API key label")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		return err
+	}
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	queries := vigiaDB.New(pool)
+	issuer := defaultKeyIssuer{store: postgresTenantAPIKeyCreator{queries: queries}}
+
+	result, err := SeedDevData(ctx, queries, issuer, DevDataParams{
+		Slug:       *slug,
+		Name:       *name,
+		DebtorRef:  *debtorRef,
+		DebtorName: *debtorName,
+		Label:      *label,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("tenant_api_key=%s\n", result.PlaintextKey)
+	return nil
+}
+
+func runKeyIssuance(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("seed", flag.ContinueOnError)
 	tenantID := flags.String("tenant-id", "", "tenant UUID to issue an API key for")
 	label := flags.String("label", "local-dev", "tenant API key label")
