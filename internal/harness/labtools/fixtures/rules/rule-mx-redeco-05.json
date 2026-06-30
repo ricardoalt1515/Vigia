@@ -1,0 +1,6 @@
+{
+  "code": "MX-REDECO-05",
+  "title": "Prohibition on Threatening or Intimidating Communication",
+  "description": "The use of threats, offensive language, intimidation, coercion, or harassment in any form of communication with debtors is strictly prohibited under REDECO/CONDUSEF regulations. Any verified violation triggers a hard block and mandatory human review (HITL required) before further collection activity may proceed.",
+  "severity": "hard_block"
+}
