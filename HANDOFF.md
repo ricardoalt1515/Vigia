@@ -1,15 +1,56 @@
 # Vigía — Session Handoff
 
 > Read this first to resume work in a new session without losing context.
-> Last updated: 2026-06-28 · Status: pre-code; planning + pre-build review complete; issues published.
+> Last updated: 2026-06-29 · Status: Issue #1 walking skeleton complete (seed + River worker + Next.js console).
+
+## Walking skeleton demo — end-to-end run order (Issue #1)
+
+Run these in order to see the three seeded interactions in the browser:
+
+```bash
+# 1. Start Postgres + MinIO
+make dev
+
+# 2. Apply all goose migrations (including River tables from 00002_river_tables.sql)
+make migrate-up
+
+# 3. Seed demo tenant, debtor, and three es-MX interactions
+#    Copy the printed tenant_api_key=<plaintext> value — you need it in step 7.
+make seed-dev
+
+# 4. Start the Go API server (set DATABASE_URL + APP_DATABASE_URL if not in shell)
+go run ./cmd/api
+
+# 5. (Optional) Start the River worker; it enqueues and drains one no-op job then idles.
+#    Ctrl-C when done.
+make worker
+
+# 6. Install Next.js console dependencies (first time only)
+make console-install
+
+# 7. Start the console dev server.
+#    Create apps/console/.env.local with the key from step 3:
+#      VIGIA_API_KEY=<plaintext key>
+#      VIGIA_API_BASE_URL=http://localhost:8080
+make console-dev
+
+# 8. Open http://localhost:3000
+#    The interactions list page renders the three seeded rows.
+#    Wrong / missing key → API returns 401 → page shows no rows (RLS proof).
+```
+
+**Cleanup:** `make down` stops Postgres + MinIO. `.next` and `node_modules` are gitignored.
+
 
 ## How to resume
 
 1. Read this file.
 2. Read docs in order: [README.md](README.md) → [docs/PRD.md](docs/PRD.md) →
    [docs/technical-design.md](docs/technical-design.md) → [docs/build-plan.md](docs/build-plan.md) →
-   [docs/regulatory-ruleset.md](docs/regulatory-ruleset.md) → [docs/architecture.md](docs/architecture.md).
-3. `gh issue list -R ricardoalt1515/Vigia`. Start with **#13 (dev env)**, then **#14 (auth)**, then **#1**.
+   [docs/regulatory-ruleset.md](docs/regulatory-ruleset.md) → [docs/architecture.md](docs/architecture.md) →
+   [docs/frontend-design.md](docs/frontend-design.md).
+3. `gh issue list -R ricardoalt1515/Vigia`. Start with **#13 (dev env)**, then **#16 (Agent Harness Lab)**,
+   then **#14 (auth)**, then **#1**.
 4. Next concrete action: build **issue #13 (dev environment & bootstrap)** — first task of the build.
 
 ## What Vigía is (one paragraph)
@@ -26,7 +67,7 @@ debt collection).
 
 - **Portfolio-first.** Building a big, complex flagship is the goal. Selling is **secondary/deferred**.
   Do NOT push "sell/validate first".
-- **Learn Go + build the agent harness himself** (realized in the Copilot phase — see reframe below).
+- **Learn Go + build the agent harness himself** (sandboxed early in #16; authority-bearing in Copilot/M4).
 - **Mexico/LATAM-first**, internationalize later.
 - **Implement the full agentic distributed-systems stack** on a real regulated domain.
 
@@ -37,13 +78,15 @@ rate-limited; its scope was covered by the others). Verdict: the **compliance sp
 strength** (deterministic + LLM-judge + evidence ledger + golden-set CI = 2026 best practice). Applied
 fixes:
 
-- **Reframe (ADR-09): workflow-first, not "agent".** The Shadow-Mode core is a deterministic workflow +
-  LLM-judge, not an autonomous loop. The genuine **agent harness is built in the Copilot phase (M4 / #10).**
+- **Reframe (ADR-09): workflow-first for compliance authority; agent lab early.** The Shadow-Mode core is a
+  deterministic workflow + LLM-judge, not an autonomous loop. A sandboxed **Agent Harness Lab** is built early
+  (#16) for portfolio/learning; authority-bearing agent behavior remains in Copilot (M4 / #10).
 - **River, hardened (ADR-01).** Kept River for the learning goal, but the durable state machine is now a
   first-class design: explicit `ComplaintCase.State` enum, idempotency keys, exactly-once evidence writes
   in-transaction, HITL pause via `awaiting_review` + re-enqueue. DBOS is the documented off-ramp.
 - **Added (ADR-10/11/12/13):** prompt caching on the judge prefix; LLM-judge injection boundary +
-  output-shape validation; per-tenant API-key auth → RLS; MCP only as a learning artifact.
+  output-shape validation; per-tenant API-key auth → RLS; MCP as an external AI-client integration surface,
+  not the internal harness runtime.
 - **Data model fixes:** added `Debtor` (needed by REDECO 01/07/11/16), `TenantAPIKey`, `PolicyBundleRule`
   join, normalized `DetectorResultRow` (was JSONB), `ComplaintCase` state machine; UUID v7; created/updated_at.
 - **Build-readiness:** `go.mod` renamed to `github.com/ricardoalt1515/vigia`; `.gitkeep` so the scaffold
@@ -57,14 +100,16 @@ fixes:
 | Decision | Why |
 |---|---|
 | Pivot → compliance/QA/evidence control plane | Category validated/crowded (Altur, Colektia, Moonflow); gap is governance + evidence |
-| **Workflow-first; agent harness at Copilot (M4)** (ADR-09) | 2026 best practice: workflows for fixed/auditable subtasks; don't over-build agent machinery Shadow Mode never uses |
+| **Workflow-first authority + early Agent Harness Lab** (ADR-09) | Keep compliance decisions auditable while showing domain-specific agent composition, tool permissions, and event logs early |
+| **Remote MCP as external integration** | June 2026 pattern: expose selected tenant-scoped Vigía capabilities to AI clients without making MCP the internal harness runtime |
+| **Separate Judge and Harness model ports** | Judge needs deterministic, rubric-versioned evaluation; Harness needs sandboxed agent steps, tools, budgets, validation, and event logs |
 | **Go + River hardened** (ADR-01) | Learn Go + build the durable machine; River = transparent Postgres substrate; DBOS = off-ramp |
 | **Deterministic-first + LLM-judge** (ADR-03) | 2026 "Hybrid Norm"; temp 0, analytic rubrics, κ-validated, versioned |
 | **Evidence ledger hash-chain + Merkle + RFC3161** (ADR-02) | Audit-grade must be defensible |
 | **Prompt caching (10) + injection boundary (11)** | Cost + safety; non-optional for volume LLM + adversarial transcripts |
 | sqlc/pgx/RLS, goose, MinIO WORM, UUID v7, tenant API-key auth | Build-readiness + control |
 
-Full ADRs with cited sources: [docs/technical-design.md §1](docs/technical-design.md).
+Full ADR-style decisions with cited sources: [docs/technical-design.md §1](docs/technical-design.md). Dedicated ADR files live in [docs/adr/](docs/adr/), including Remote MCP and separate Judge/Harness model ports.
 
 ## The open business risk (validate when selling becomes primary)
 
@@ -76,9 +121,9 @@ it doesn't raise recovery?"*
 
 - Remote: `git@github.com:ricardoalt1515/Vigia.git` (gh authed as `ricardoalt1515`).
 - Module path now `github.com/ricardoalt1515/vigia`.
-- Files present: docs, `go.mod`, `sqlc.yaml`, `docker-compose.yml`, `Makefile`, `.env.example`,
-  `.gitignore`, `.gitkeep` in each dir. **No application Go code yet** (by design).
-- **Committed (local, not pushed):** `1f54484 chore: bootstrap Go scaffold and planning docs`.
+- Files present: docs incl. `docs/frontend-design.md`, `go.mod`, `sqlc.yaml`, `docker-compose.yml`,
+  `Makefile`, `.env.example`, `.gitignore`, `.gitkeep` in each dir. **No application Go code yet** (by design).
+- **Committed (local, not pushed):** `29d91d4 chore: bootstrap Go scaffold and planning docs`.
   Push only when asked. No application Go code committed yet (by design).
 
 ## Issues (GitHub, dependency-ordered)
@@ -87,7 +132,14 @@ Label `ready` = triaged for an AFK agent. Start at **#13**.
 
 ```
 #13 dev env / bootstrap        (UNBLOCKED — start here)
-#14 tenant auth (API key→RLS)  ← #13
+#16 agent harness lab epic     ← #13        (sandboxed/read-only/draft-only; uses Synthetic Tenant Context only)
+  #18 runtime skeleton + invariant tests
+  #19 tool contracts + synthetic Case fixture
+  #20 deterministic Case orchestrator + Domain Agents
+  #21 demo CLI + Case Brief outputs
+  #22 Bedrock Claude opt-in provider
+#14 tenant auth (API key→RLS)  ← #13        (required before #17 external MCP)
+#17 remote MCP server          ← #16/#18-#22, #14 (tenant-scoped external integration; not internal runtime)
 #1  thin walking skeleton      ← #13, #14   (re-scoped: one interaction → API → console)
 #2  hours detector             ← #1
 #3  evidence ledger            ← #2
@@ -98,7 +150,7 @@ Label `ready` = triaged for an AFK agent. Start at **#13**.
 #7  remaining detectors + dash  ← #6
 #8  durable complaint + HITL    ← #3        (hardened River state machine)
 #9  monthly REDECO report       ← #8, #7
-#10 realtime guardrails + agent harness ← #6, #4
+#10 realtime guardrails + authority-bearing harness ← #16, #6, #4
 #11 voice pipeline              ← #7
 #12 observability + Merkle anchor ← #3
 ```
@@ -114,4 +166,7 @@ Label `ready` = triaged for an AFK agent. Start at **#13**.
 ## Immediate next step
 
 Build **#13 (dev env/bootstrap)**: docker-compose (Postgres+MinIO), Makefile, .env.example, goose wired,
-`internal/config`, sqlc generating, core types incl. `Debtor`. Then **#14 (auth)**, then **#1**.
+`internal/config`, sqlc generating, core types incl. `Debtor`. Then implement the **#16 Agent Harness Lab** via
+slices **#18 → #19 → #20 → #21 → #22** using Synthetic Tenant Context only, then **#14 (auth)**, then **#1**.
+Issue **#17 (Remote MCP Server)** is ready after the #16 slices and #14; its first slice must read synthetic Case
+Brief artifacts through a tenant-aware index filtered by #14 tenant context, never through arbitrary file paths.

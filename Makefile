@@ -1,4 +1,4 @@
-.PHONY: dev down logs tools migrate-up migrate-down sqlc test tidy
+.PHONY: dev down logs tools migrate-up migrate-down sqlc test tidy worker seed-dev console-install console-dev
 
 DATABASE_URL ?= postgres://vigia:vigia@localhost:5432/vigia?sslmode=disable
 TOOL_BIN := $(CURDIR)/bin
@@ -46,3 +46,17 @@ test:
 
 tidy:
 	go mod tidy
+
+# --- workers and seed ---
+worker: ## run the River worker process
+	go run ./cmd/worker
+
+seed-dev: ## seed demo tenant, debtor, and three interactions; prints tenant_api_key=<plaintext>
+	go run ./cmd/seed dev-data
+
+# --- console ---
+console-install: ## install Next.js console dependencies (run once)
+	cd apps/console && npm install
+
+console-dev: ## start the Next.js console dev server (set VIGIA_API_KEY in .env.local first)
+	cd apps/console && npm run dev
