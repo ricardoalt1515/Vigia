@@ -82,7 +82,7 @@ this prerequisite; it does not introduce a new role.
 Extend the existing `cmd/seed` binary with a subcommand dispatch on `args[0]`:
 
 ```text
-seed dev-data [--slug demo-tenant] [--name "Demo Tenant"] [--debtor-ref debtor-001] [--label local-dev]
+seed dev-data [--slug demo] [--name "Demo Tenant"] [--debtor-ref debtor-001] [--label local-dev]
 seed [--tenant-id <uuid>] [--label local-dev]     # existing key-issuance path, unchanged
 ```
 

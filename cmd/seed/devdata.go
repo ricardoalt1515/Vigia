@@ -31,7 +31,7 @@ type KeyIssuer interface {
 // DevDataParams controls the fixture data created by SeedDevData.
 // All fields have sensible defaults so the binary works with zero flags.
 type DevDataParams struct {
-	Slug       string // tenant slug (default: demo-tenant)
+	Slug       string // tenant slug (default: demo)
 	Name       string // tenant display name
 	DebtorRef  string // debtor external_ref (default: debtor-001)
 	DebtorName string // debtor display_name

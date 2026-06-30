@@ -138,7 +138,7 @@ func (k *fakeKeyIssuer) IssueTenantAPIKey(ctx context.Context, params IssueTenan
 // defaultParams returns a DevDataParams with standard dev fixture values.
 func defaultParams() DevDataParams {
 	return DevDataParams{
-		Slug:       "demo-tenant",
+		Slug:       "demo",
 		Name:       "Demo Tenant",
 		DebtorRef:  "debtor-001",
 		DebtorName: "Juana Pérez (demo)",
@@ -219,7 +219,7 @@ func TestSeedDevData(t *testing.T) {
 
 		q := &fakeSeedQuerier{
 			tenantBySlug: map[string]vigiaDB.Tenant{
-				"demo-tenant": {ID: existingTenantID, Slug: "demo-tenant"},
+				"demo": {ID: existingTenantID, Slug: "demo"},
 			},
 			debtorRows: []vigiaDB.Debtor{
 				{ID: existingDebtorID, TenantID: existingTenantID, ExternalRef: "debtor-001"},
@@ -271,7 +271,7 @@ func TestSeedDevData(t *testing.T) {
 
 		q := &fakeSeedQuerier{
 			tenantBySlug: map[string]vigiaDB.Tenant{
-				"demo-tenant": {ID: existingTenantID, Slug: "demo-tenant"},
+				"demo": {ID: existingTenantID, Slug: "demo"},
 			},
 			debtorRows: []vigiaDB.Debtor{
 				{ID: existingDebtorID, TenantID: existingTenantID, ExternalRef: "debtor-001"},

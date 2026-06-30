@@ -135,7 +135,7 @@ func run(ctx context.Context, args []string) error {
 
 func runDevData(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("seed dev-data", flag.ContinueOnError)
-	slug := flags.String("slug", "demo-tenant", "tenant slug")
+	slug := flags.String("slug", "demo", "tenant slug")
 	name := flags.String("name", "Demo Tenant", "tenant display name")
 	debtorRef := flags.String("debtor-ref", "debtor-001", "debtor external ref")
 	debtorName := flags.String("debtor-name", "Juana Pérez (demo)", "debtor display name")
