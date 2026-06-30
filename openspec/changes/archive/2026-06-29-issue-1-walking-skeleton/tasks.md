@@ -22,10 +22,10 @@ Chained PRs recommended: Yes
 
 ## Blockers / stop conditions
 
-- [ ] Confirm issue #14 endpoint shape for the JSON envelope (`{interactions:[...]}` vs bare array `[...]`) before apply; `api.ts` already tolerates both, but verify against `internal/httpapi` to record the canonical shape.
-- [ ] Resolve the River module version (latest stable v0.x tag) at apply start; use the same tag for `river`, `riverpgxv5`, and `migrate-get`; record it in apply-progress.
-- [ ] Do not widen scope: no detail page, no filters, no pagination controls, no DTO changes, no CORS, no real River jobs, no Harness/Judge integration.
-- [ ] Stop if `internal/auth`, `internal/tenantdb`, `internal/httpapi`, `internal/postgres`, `internal/db`, or `internal/harness` require modification; this change must consume those packages as-is.
+- [x] Confirm issue #14 endpoint shape for the JSON envelope (`{interactions:[...]}` vs bare array `[...]`) before apply; `api.ts` already tolerates both, but verify against `internal/httpapi` to record the canonical shape.
+- [x] Resolve the River module version (latest stable v0.x tag) at apply start; use the same tag for `river`, `riverpgxv5`, and `migrate-get`; record it in apply-progress.
+- [x] Do not widen scope: no detail page, no filters, no pagination controls, no DTO changes, no CORS, no real River jobs, no Harness/Judge integration.
+- [x] Stop if `internal/auth`, `internal/tenantdb`, `internal/httpapi`, `internal/postgres`, `internal/db`, or `internal/harness` require modification; this change must consume those packages as-is.
 
 ---
 
@@ -133,7 +133,7 @@ Tasks T3.1–T3.4 are sequential (scaffold before app structure before data laye
 
 ## Final validation (all PRs merged)
 
-- [ ] Run Go unit tests for seed and worker: `go test ./cmd/seed ./cmd/worker -count=1`
-- [ ] Run full Go suite in short mode (no DB): `go test ./... -short -count=1`
-- [ ] Confirm River migration round-trip is clean: `make migrate-up && make migrate-down`
-- [ ] Manual end-to-end demo: `make seed-dev` → `cmd/api` → `make worker` → `make console-dev` → verify the three demo interactions appear on the page; verify a wrong key shows nothing (RLS proof).
+- [x] Run Go unit tests for seed and worker: `go test ./cmd/seed ./cmd/worker -count=1`
+- [x] Run full Go suite in short mode (no DB): `go test ./... -short -count=1`
+- [x] Confirm River migration round-trip is clean: `make migrate-up && make migrate-down`
+- [ ] Manual end-to-end demo (PENDING — user to run): `make seed-dev` → `cmd/api` → `make worker` → `make console-dev` → verify the three demo interactions appear on the page; verify a wrong key shows nothing (RLS proof). NOTE: automated proof is in place — `TestSeedDevDataIntegration` and `TestWorkerIntegration` PASS against live Postgres, and `next build`/`tsc` pass; only the literal browser render was not executed in this session.
