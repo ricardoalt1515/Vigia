@@ -77,9 +77,9 @@ Within this work unit, T2.2–T2.3 (migration) and T2.4–T2.7 (noop unit tests)
   Create `db/migrations/00002_river_tables.sql` by wrapping the captured SQL verbatim in goose markers (`-- +goose Up`, `-- +goose StatementBegin`, `-- +goose StatementEnd`, `-- +goose Down`). Do not hand-author any River SQL.
   - Verification: file exists and goose markers are syntactically correct (`./bin/goose postgres $DATABASE_URL validate`)
 
-- [ ] **T2.3** [migration verification · sequential-after-T2.2] Run `make migrate-up` against a local Postgres. Verify all River-required tables exist. Run `make migrate-down`. Verify tables are removed. Confirm round-trip is clean (exit code 0 both directions). Document the outcome in apply-progress.
+- [x] **T2.3** [migration verification · sequential-after-T2.2] Run `make migrate-up` against a local Postgres. Verify all River-required tables exist. Run `make migrate-down`. Verify tables are removed. Confirm round-trip is clean (exit code 0 both directions). Document the outcome in apply-progress.
   - Verification: `make migrate-up && make migrate-down` (manual; exit 0 both)
-  - **BLOCKED**: Postgres not running in apply environment. Run `make dev` first, then execute this step manually.
+  - **VERIFIED 2026-06-29**: `make migrate-up` created 6 River tables (river_client, river_client_queue, river_job, river_leader, river_migration, river_queue); `make migrate-down` removed them cleanly; re-applied. Live-DB integration tests `TestSeedDevDataIntegration` and `TestWorkerIntegration` both PASS.
 
 - [x] **T2.4** [test-first · RED · parallel-after-T2.1] Write `cmd/worker/noop_test.go` with unit test `TestNoopJobKind`: assert `NoopJob{}.Kind() == "noop"`. Expect test to fail (file does not exist yet).
   - Verification: `go test ./cmd/worker -run TestNoopJobKind -count=1`
@@ -105,19 +105,19 @@ Within this work unit, T2.2–T2.3 (migration) and T2.4–T2.7 (noop unit tests)
 
 Tasks T3.1–T3.4 are sequential (scaffold before app structure before data layer before page). T3.5 (Makefile) and T3.6 (docs) are independent of each other and of T3.1–T3.4, but are logically grouped at the end.
 
-- [ ] **T3.1** [scaffold] Remove `apps/console/.gitkeep`. Create the minimal App Router scaffold files: `package.json` (dependencies: `next`, `react`, `react-dom`, `typescript`, `tailwindcss` v4, `@tailwindcss/postcss`; scripts: `dev`, `build`, `start`), `tsconfig.json`, `next.config.ts`, `postcss.config.mjs` (`@tailwindcss/postcss`), `.gitignore` (`.env.local`, `node_modules`, `.next`), `.env.example` (`VIGIA_API_KEY=`, `VIGIA_API_BASE_URL=http://localhost:8080`).
+- [x] **T3.1** [scaffold] Remove `apps/console/.gitkeep`. Create the minimal App Router scaffold files: `package.json` (dependencies: `next`, `react`, `react-dom`, `typescript`, `tailwindcss` v4, `@tailwindcss/postcss`; scripts: `dev`, `build`, `start`), `tsconfig.json`, `next.config.ts`, `postcss.config.mjs` (`@tailwindcss/postcss`), `.gitignore` (`.env.local`, `node_modules`, `.next`), `.env.example` (`VIGIA_API_KEY=`, `VIGIA_API_BASE_URL=http://localhost:8080`).
   - Verification: `cd apps/console && npm install && npm run build` (or at minimum `npx next build` — fails gracefully with no pages yet, which is expected)
 
-- [ ] **T3.2** [app shell] Create `src/app/globals.css` (`@import "tailwindcss";`), `src/app/layout.tsx` (root layout with Geist font import and `globals.css`), `src/app/page.tsx` (redirects to `/interactions` or renders a shell — no business content here).
+- [x] **T3.2** [app shell] Create `src/app/globals.css` (`@import "tailwindcss";`), `src/app/layout.tsx` (root layout with Geist font import and `globals.css`), `src/app/page.tsx` (redirects to `/interactions` or renders a shell — no business content here).
   - Verification: `npm run build` completes without TypeScript errors on the layout/root page
 
-- [ ] **T3.3** [data layer] Create `src/lib/api.ts`. Add `import "server-only"` at top. Define the `Interaction` type (`id`, `occurred_at`, `channel`, `direction`). Implement `listInteractions()`: read `VIGIA_API_BASE_URL` and `VIGIA_API_KEY` from `process.env`; throw if key is absent; fetch `GET /v1/interactions` with `Authorization: Bearer ${key}` and `cache: "no-store"`; tolerate both `{ interactions: [...] }` and bare array `[...]` envelope shapes. No `NEXT_PUBLIC_` prefix — key stays server-side only.
+- [x] **T3.3** [data layer] Create `src/lib/api.ts`. Add `import "server-only"` at top. Define the `Interaction` type (`id`, `occurred_at`, `channel`, `direction`). Implement `listInteractions()`: read `VIGIA_API_BASE_URL` and `VIGIA_API_KEY` from `process.env`; throw if key is absent; fetch `GET /v1/interactions` with `Authorization: Bearer ${key}` and `cache: "no-store"`; tolerate both `{ interactions: [...] }` and bare array `[...]` envelope shapes. No `NEXT_PUBLIC_` prefix — key stays server-side only.
   - Verification: TypeScript compilation clean (`npx tsc --noEmit`)
 
-- [ ] **T3.4** [interactions page] Create `src/app/interactions/page.tsx` as an `async` Server Component (no `"use client"`). Call `listInteractions()`. Render a semantic HTML table with one row per interaction showing `id`, `occurred_at`, `channel`, `direction` only. No client fetch, no debtor data, no detail links, no pagination, no filters. Exactly one user-navigable route exists in the app.
+- [x] **T3.4** [interactions page] Create `src/app/interactions/page.tsx` as an `async` Server Component (no `"use client"`). Call `listInteractions()`. Render a semantic HTML table with one row per interaction showing `id`, `occurred_at`, `channel`, `direction` only. No client fetch, no debtor data, no detail links, no pagination, no filters. Exactly one user-navigable route exists in the app.
   - Verification: `npm run build` succeeds; manual demo confirms page renders the three seeded rows
 
-- [ ] **T3.5** [Makefile targets] Add the following targets to the repo root `Makefile` without touching existing Go targets:
+- [x] **T3.5** [Makefile targets] Add the following targets to the repo root `Makefile` without touching existing Go targets:
   ```
   console-install: cd apps/console && npm install
   console-dev:     cd apps/console && npm run dev
@@ -126,7 +126,7 @@ Tasks T3.1–T3.4 are sequential (scaffold before app structure before data laye
   ```
   - Verification: `make seed-dev` (with DB up) prints `tenant_api_key=...` once; `make console-install` exits 0
 
-- [ ] **T3.6** [docs] Update `HANDOFF.md` with the end-to-end local run order for the walking skeleton demo: `make dev` → `make migrate-up` → `make seed-dev` (copy plaintext key) → start `cmd/api` → `make worker` → `make console-install` (once) → `make console-dev` → open the interactions page. Note that the worker can be `Ctrl-C`d after the no-op job completes. No permanent change to API/schema docs.
+- [x] **T3.6** [docs] Update `HANDOFF.md` with the end-to-end local run order for the walking skeleton demo: `make dev` → `make migrate-up` → `make seed-dev` (copy plaintext key) → start `cmd/api` → `make worker` → `make console-install` (once) → `make console-dev` → open the interactions page. Note that the worker can be `Ctrl-C`d after the no-op job completes. No permanent change to API/schema docs.
   - Verification: A developer reading the HANDOFF can reproduce the full demo without consulting the design doc.
 
 ---

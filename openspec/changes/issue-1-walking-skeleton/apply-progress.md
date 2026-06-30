@@ -128,4 +128,73 @@ go test ./... -short -count=1 → all packages PASS
 
 ## Slice 3: Next.js console + Makefile targets (PR 3)
 
-**Status:** NOT STARTED
+**Status:** COMPLETE
+**Branch:** issue-1-console
+**Completed:** 2026-06-29
+**Next.js version:** 15.5.19 (resolved at install time)
+
+### Confirmed API JSON envelope shape
+
+Canonical shape from `internal/httpapi/httpapi.go` (`interactionsResponse` struct, line 44–46):
+```json
+{ "interactions": [ { "id": "...", "occurred_at": "...", "channel": "...", "direction": "..." } ] }
+```
+`occurred_at` is a Go `time.Time`, serialized as RFC 3339 string.
+`api.ts` handles the canonical `{ interactions: [...] }` envelope first; tolerates bare array for forward compatibility.
+
+### Tasks completed
+
+- [x] T3.1 SCAFFOLD: `.gitkeep` removed; `package.json`, `tsconfig.json`, `next.config.ts`, `postcss.config.mjs`, `.gitignore`, `.env.example` created
+- [x] T3.2 APP SHELL: `src/app/globals.css`, `src/app/layout.tsx`, `src/app/page.tsx` (redirect to `/interactions`) created
+- [x] T3.3 DATA LAYER: `src/lib/api.ts` with `import "server-only"`, `Interaction` type, `listInteractions()` — no `NEXT_PUBLIC_` prefix
+- [x] T3.4 INTERACTIONS PAGE: `src/app/interactions/page.tsx` async Server Component with `export const dynamic = "force-dynamic"` and semantic `<table>`
+- [x] T3.5 MAKEFILE: `worker`, `seed-dev`, `console-install`, `console-dev` targets added; existing Go targets untouched
+- [x] T3.6 DOCS: `HANDOFF.md` updated with step-by-step end-to-end run order
+
+### Files created / modified
+
+| File | Action |
+|------|--------|
+| `apps/console/.gitignore` | Created — `.env.local`, `node_modules`, `.next` |
+| `apps/console/.env.example` | Created — `VIGIA_API_KEY=`, `VIGIA_API_BASE_URL=http://localhost:8080`, end-to-end run order comment |
+| `apps/console/package.json` | Created — next@^15.3.0, react@^19.0.0, react-dom@^19.0.0, server-only; tailwindcss@^4.0.0, @tailwindcss/postcss@^4.0.0, typescript@^5.0.0 |
+| `apps/console/package-lock.json` | Created — lock file (47 packages) |
+| `apps/console/tsconfig.json` | Created — strict, moduleResolution: bundler, `@/*` path alias; Next.js added `target: ES2017` during build |
+| `apps/console/next.config.ts` | Created — empty NextConfig export |
+| `apps/console/postcss.config.mjs` | Created — `@tailwindcss/postcss` plugin |
+| `apps/console/next-env.d.ts` | Created by Next.js — TypeScript env types |
+| `apps/console/src/app/globals.css` | Created — `@import "tailwindcss"` |
+| `apps/console/src/app/layout.tsx` | Created — RootLayout, metadata, slate-50 body |
+| `apps/console/src/app/page.tsx` | Created — `redirect("/interactions")` |
+| `apps/console/src/app/interactions/page.tsx` | Created — async Server Component, `force-dynamic`, semantic table |
+| `apps/console/src/lib/api.ts` | Created — `server-only`, `Interaction` type, `listInteractions()` |
+| `Makefile` | Modified — added `worker`, `seed-dev`, `console-install`, `console-dev` targets |
+| `HANDOFF.md` | Modified — added walking skeleton demo end-to-end run order |
+
+### Verification output
+
+```
+npm install → 47 packages, exit 0
+
+npx tsc --noEmit → exit 0 (no TypeScript errors)
+
+npm run build:
+   ▲ Next.js 15.5.19
+ ✓ Compiled successfully in 2.9s
+ ✓ Generating static pages (4/4)
+
+Route (app)          Size   First Load JS
+○ /                  124 B  103 kB     (static redirect)
+ƒ /interactions      124 B  103 kB     (dynamic — force-dynamic)
+
+build exit: 0
+```
+
+### Design decisions applied
+
+- **`force-dynamic` on interactions page**: prevents Next.js from pre-rendering the page at build time, which would fail because `VIGIA_API_KEY` is not set in the build environment.
+- **`server-only` import**: compile-time guard that prevents `listInteractions` from being accidentally bundled in a Client Component.
+- **Canonical envelope first**: `api.ts` checks `{ interactions: [...] }` before the bare-array fallback, matching the actual API implementation.
+- **No Geist font package**: layout uses Tailwind's system font stack for the walking skeleton; font customization deferred to later slices.
+- **No CORS added**: console fetches from the Go API server-side only (Next.js Server Component), so CORS is not needed and was not added.
+- **`tsconfig.tsbuildinfo` not committed**: build artifact; gitignored via Next.js convention.
