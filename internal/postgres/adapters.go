@@ -2,14 +2,18 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ricardoalt1515/vigia/internal/auth"
+	"github.com/ricardoalt1515/vigia/internal/core"
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
+	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/httpapi"
 	"github.com/ricardoalt1515/vigia/internal/tenantdb"
 )
@@ -106,3 +110,90 @@ func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID strin
 func uuidString(id pgtype.UUID) string {
 	return id.String()
 }
+
+func parseUUID(value string) (pgtype.UUID, error) {
+	var id pgtype.UUID
+	if err := id.Scan(value); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("parse uuid %q: %w", value, err)
+	}
+	return id, nil
+}
+
+// EvaluationStore persists an evaluations header row and its
+// detector_result_rows children inside a single tenantdb.WithTenantTx call.
+type EvaluationStore struct {
+	db tenantdb.Beginner
+}
+
+func NewEvaluationStore(db tenantdb.Beginner) *EvaluationStore {
+	return &EvaluationStore{db: db}
+}
+
+func NewEvaluationStoreFromPool(pool *pgxpool.Pool) *EvaluationStore {
+	return NewEvaluationStore(poolBeginner{pool: pool})
+}
+
+// detectorResultPayload is the minimal JSON shape stored in
+// detector_result_rows.result_payload for a detector's rationale.
+type detectorResultPayload struct {
+	Rationale string `json:"rationale"`
+}
+
+func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.CreateEvaluationInput) (core.Evaluation, error) {
+	tenantUUID, err := parseUUID(in.TenantID)
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+	interactionUUID, err := parseUUID(in.InteractionEventID)
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+
+	var result core.Evaluation
+	err = tenantdb.WithTenantTx(ctx, s.db, in.TenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		q := vigiaDB.New(tx)
+
+		header, err := q.CreateEvaluation(ctx, vigiaDB.CreateEvaluationParams{
+			TenantID:           tenantUUID,
+			InteractionEventID: interactionUUID,
+			OverallOutcome:     in.OverallOutcome,
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, dr := range in.DetectorResults {
+			payload, err := json.Marshal(detectorResultPayload{Rationale: dr.Rationale})
+			if err != nil {
+				return err
+			}
+			if _, err := q.CreateDetectorResultRow(ctx, vigiaDB.CreateDetectorResultRowParams{
+				TenantID:           tenantUUID,
+				InteractionEventID: interactionUUID,
+				DetectorCode:       dr.DetectorCode,
+				Outcome:            string(dr.Outcome),
+				Severity:           string(dr.Severity),
+				ResultPayload:      payload,
+				EvaluationID:       pgtype.UUID{Bytes: header.ID.Bytes, Valid: true},
+			}); err != nil {
+				return err
+			}
+		}
+
+		result = core.Evaluation{
+			ID:                  core.ID(uuidString(header.ID)),
+			TenantID:            core.ID(uuidString(header.TenantID)),
+			InteractionEventID:  core.ID(uuidString(header.InteractionEventID)),
+			OverallOutcome:      header.OverallOutcome,
+			PolicyBundleVersion: header.PolicyBundleVersion,
+			CreatedAt:           header.CreatedAt.Time,
+		}
+		return nil
+	})
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+	return result, nil
+}
+
+var _ evaluation.EvaluationStore = (*EvaluationStore)(nil)
