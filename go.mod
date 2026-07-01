@@ -7,7 +7,10 @@ tool (
 	github.com/sqlc-dev/sqlc/cmd/sqlc
 )
 
-require github.com/jackc/pgx/v5 v5.7.5
+require (
+	github.com/jackc/pgx/v5 v5.7.5
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+)
 
 require (
 	cel.dev/expr v0.25.1 // indirect

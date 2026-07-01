@@ -679,3 +679,179 @@ func TestOrchestrator_FailureReasonFromSecondFailure(t *testing.T) {
 type stringError struct{ msg string }
 
 func (e *stringError) Error() string { return e.msg }
+
+// --- Event-observer seam ------------------------------------------------------
+
+// recordedObservation captures one WithEventObserver invocation.
+type recordedObservation struct {
+	agentName string
+	events    []harness.Event
+}
+
+func TestOrchestrator_WithEventObserver_ReceivesEventsPerAgent(t *testing.T) {
+	const caseID = "CASE-SYN-001"
+	providers := map[string]*caseflowQueuedProvider{
+		"PolicyExplainer":       {outputs: []harness.ModelOutput{finalOutput(validPolicyExplanationJSON(caseID))}},
+		"CaseInvestigator":      {outputs: []harness.ModelOutput{finalOutput(validCaseInvestigationJSON(caseID))}},
+		"EvidencePackager":      {outputs: []harness.ModelOutput{finalOutput(validEvidenceManifestJSON(caseID))}},
+		"SupervisorNoteDrafter": {outputs: []harness.ModelOutput{finalOutput(validSupervisorNoteJSON(caseID))}},
+	}
+
+	defs, factory := fourAgentDefs(providers)
+	gate := gateAll(harness.PermissionAllowed)
+
+	var observed []recordedObservation
+	observer := func(agentName string, events []harness.Event) {
+		observed = append(observed, recordedObservation{agentName: agentName, events: events})
+	}
+
+	o, err := caseflow.NewOrchestrator(factory, harness.ToolRegistry{}, gate, defs, caseflow.WithEventObserver(observer))
+	if err != nil {
+		t.Fatalf("NewOrchestrator: %v", err)
+	}
+
+	brief, err := o.Run(context.Background(), caseID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if brief.Status != caseflow.CaseStatusComplete {
+		t.Fatalf("expected CaseStatusComplete, got %q", brief.Status)
+	}
+
+	if len(observed) != 4 {
+		t.Fatalf("expected 4 observer invocations (one per agent), got %d", len(observed))
+	}
+	wantOrder := []string{"PolicyExplainer", "CaseInvestigator", "EvidencePackager", "SupervisorNoteDrafter"}
+	for i, want := range wantOrder {
+		if observed[i].agentName != want {
+			t.Errorf("observed[%d].agentName: want %q, got %q", i, want, observed[i].agentName)
+		}
+	}
+}
+
+func TestOrchestrator_WithEventObserver_InvokedForFailingAgentOnly(t *testing.T) {
+	const caseID = "CASE-SYN-001"
+
+	policyProvider := &caseflowQueuedProvider{outputs: []harness.ModelOutput{
+		finalOutput("bad-json-1"),
+		finalOutput("bad-json-2"),
+	}}
+
+	downstream := map[string]*caseflowQueuedProvider{
+		"CaseInvestigator":      {},
+		"EvidencePackager":      {},
+		"SupervisorNoteDrafter": {},
+	}
+
+	defs, _ := fourAgentDefs(downstream)
+	defs[0].Validator = vFunc(func(out harness.ModelOutput) error {
+		if out.ToolCall != nil {
+			return nil
+		}
+		var p caseflow.PolicyExplanation
+		if err := json.Unmarshal([]byte(out.FinalOutput), &p); err != nil {
+			return err
+		}
+		return nil
+	})
+
+	factory := func(name string) harness.ModelProvider {
+		if name == "PolicyExplainer" {
+			return policyProvider
+		}
+		return downstream[name]
+	}
+
+	var observed []recordedObservation
+	observer := func(agentName string, events []harness.Event) {
+		observed = append(observed, recordedObservation{agentName: agentName, events: events})
+	}
+
+	gate := gateAll(harness.PermissionAllowed)
+	o, err := caseflow.NewOrchestrator(factory, harness.ToolRegistry{}, gate, defs, caseflow.WithEventObserver(observer))
+	if err != nil {
+		t.Fatalf("NewOrchestrator: %v", err)
+	}
+	brief, err := o.Run(context.Background(), caseID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if brief.Status != caseflow.CaseStatusIncomplete {
+		t.Fatalf("expected CaseStatusIncomplete, got %q", brief.Status)
+	}
+	if brief.FailedAgent != "PolicyExplainer" {
+		t.Fatalf("expected FailedAgent=PolicyExplainer, got %q", brief.FailedAgent)
+	}
+
+	if len(observed) == 0 {
+		t.Fatal("expected observer to be invoked at least once for the failing agent")
+	}
+	foundTerminalFailure := false
+	for _, obs := range observed {
+		if obs.agentName != "PolicyExplainer" {
+			t.Errorf("observer invoked for downstream agent %q; should never run", obs.agentName)
+		}
+		for _, ev := range obs.events {
+			if ev.Type == harness.EventValidationFailure {
+				foundTerminalFailure = true
+			}
+		}
+	}
+	if !foundTerminalFailure {
+		t.Error("expected at least one observed step to contain a validation_failure event")
+	}
+
+	for name, p := range downstream {
+		if p.calls != 0 {
+			t.Errorf("downstream agent %q should not have been called, got %d calls", name, p.calls)
+		}
+	}
+}
+
+func TestOrchestrator_NoObserverSupplied_PreservesCurrentBehavior(t *testing.T) {
+	const caseID = "CASE-SYN-001"
+
+	makeProviders := func() map[string]*caseflowQueuedProvider {
+		return map[string]*caseflowQueuedProvider{
+			"PolicyExplainer":       {outputs: []harness.ModelOutput{finalOutput(validPolicyExplanationJSON(caseID))}},
+			"CaseInvestigator":      {outputs: []harness.ModelOutput{finalOutput(validCaseInvestigationJSON(caseID))}},
+			"EvidencePackager":      {outputs: []harness.ModelOutput{finalOutput(validEvidenceManifestJSON(caseID))}},
+			"SupervisorNoteDrafter": {outputs: []harness.ModelOutput{finalOutput(validSupervisorNoteJSON(caseID))}},
+		}
+	}
+	gate := gateAll(harness.PermissionAllowed)
+
+	// No options at all — existing four-arg call site.
+	defsNoOpt, factoryNoOpt := fourAgentDefs(makeProviders())
+	oNoOpt, err := caseflow.NewOrchestrator(factoryNoOpt, harness.ToolRegistry{}, gate, defsNoOpt)
+	if err != nil {
+		t.Fatalf("NewOrchestrator (no opts): %v", err)
+	}
+	briefNoOpt, err := oNoOpt.Run(context.Background(), caseID)
+	if err != nil {
+		t.Fatalf("Run (no opts): %v", err)
+	}
+
+	// Explicit no-op observer.
+	defsNoop, factoryNoop := fourAgentDefs(makeProviders())
+	oNoop, err := caseflow.NewOrchestrator(factoryNoop, harness.ToolRegistry{}, gate, defsNoop, caseflow.WithEventObserver(func(string, []harness.Event) {}))
+	if err != nil {
+		t.Fatalf("NewOrchestrator (noop observer): %v", err)
+	}
+	briefNoop, err := oNoop.Run(context.Background(), caseID)
+	if err != nil {
+		t.Fatalf("Run (noop observer): %v", err)
+	}
+
+	if briefNoOpt.Status != briefNoop.Status {
+		t.Errorf("Status differs: no-opt=%q noop-observer=%q", briefNoOpt.Status, briefNoop.Status)
+	}
+	if len(briefNoOpt.Stages) != len(briefNoop.Stages) {
+		t.Fatalf("Stages length differs: no-opt=%d noop-observer=%d", len(briefNoOpt.Stages), len(briefNoop.Stages))
+	}
+	for i := range briefNoOpt.Stages {
+		if briefNoOpt.Stages[i].AgentName != briefNoop.Stages[i].AgentName {
+			t.Errorf("Stages[%d].AgentName differs: no-opt=%q noop-observer=%q", i, briefNoOpt.Stages[i].AgentName, briefNoop.Stages[i].AgentName)
+		}
+	}
+}
