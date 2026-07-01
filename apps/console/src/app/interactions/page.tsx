@@ -2,14 +2,47 @@
 // The API key and live data are only available at request time.
 export const dynamic = "force-dynamic";
 
-import { listInteractions } from "@/lib/api";
+import { getSummary, listInteractions } from "@/lib/api";
+
+function OutcomeBadge({ outcome }: { outcome: string | null }) {
+  if (outcome === null) {
+    return <span className="text-slate-400">—</span>;
+  }
+  const isBlock = outcome === "BLOCK";
+  return (
+    <span
+      className={
+        isBlock
+          ? "inline-block rounded px-2 py-0.5 text-xs font-semibold bg-red-100 text-red-700"
+          : "inline-block rounded px-2 py-0.5 text-xs font-semibold bg-green-100 text-green-700"
+      }
+    >
+      {outcome}
+    </span>
+  );
+}
 
 export default async function InteractionsPage() {
-  const interactions = await listInteractions();
+  const [interactions, summary] = await Promise.all([
+    listInteractions(),
+    getSummary(),
+  ]);
 
   return (
     <main className="p-8">
-      <h1 className="text-2xl font-semibold mb-6">Interactions</h1>
+      <h1 className="text-2xl font-semibold mb-4">Interactions</h1>
+
+      {/* Out-of-hours tile: fed by the summary endpoint's SQL aggregate,
+          never computed by summing rows rendered here. */}
+      <div className="mb-6 inline-block rounded border border-slate-200 bg-slate-50 px-4 py-3">
+        <div className="text-xs uppercase tracking-wide text-slate-500">
+          Out-of-hours interactions
+        </div>
+        <div className="text-2xl font-semibold text-slate-800">
+          {summary.out_of_hours_count}
+        </div>
+      </div>
+
       {interactions.length === 0 ? (
         <p className="text-slate-500">No interactions found.</p>
       ) : (
@@ -28,6 +61,12 @@ export default async function InteractionsPage() {
                 </th>
                 <th className="px-4 py-2 text-left font-medium text-slate-700 border-b border-slate-200">
                   Direction
+                </th>
+                <th className="px-4 py-2 text-left font-medium text-slate-700 border-b border-slate-200">
+                  Outcome
+                </th>
+                <th className="px-4 py-2 text-left font-medium text-slate-700 border-b border-slate-200">
+                  Reason
                 </th>
               </tr>
             </thead>
@@ -48,6 +87,12 @@ export default async function InteractionsPage() {
                   </td>
                   <td className="px-4 py-2 text-slate-700">
                     {interaction.direction}
+                  </td>
+                  <td className="px-4 py-2">
+                    <OutcomeBadge outcome={interaction.outcome} />
+                  </td>
+                  <td className="px-4 py-2 text-slate-600 text-xs max-w-xs truncate" title={interaction.reason ?? undefined}>
+                    {interaction.reason ?? "—"}
                   </td>
                 </tr>
               ))}
