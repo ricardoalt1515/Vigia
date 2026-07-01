@@ -1,0 +1,6 @@
+{
+  "code": "MX-REDECO-04",
+  "title": "Prohibited Contact Outside Permitted Hours",
+  "description": "Contact with debtors is permitted only on business days between 08:00 and 21:00 in the debtor's declared timezone. Any contact initiated outside this window — including evenings, nights, early mornings, and non-business days — constitutes a hard block violation under REDECO/CONDUSEF regulations.",
+  "severity": "hard_block"
+}
