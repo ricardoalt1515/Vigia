@@ -52,6 +52,7 @@ func run(args []string, outDir string) int {
 	fs := flag.NewFlagSet("harness-demo", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	casePath := fs.String("case", defaultCasePath, "path to a synthetic Case JSON file")
+	provider := fs.String("provider", "fake", `model provider to use: "fake" (default, deterministic, no network) or "bedrock" (opt-in, reads AWS_REGION/BEDROCK_MODEL_ID)`)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -73,6 +74,15 @@ func run(args []string, outDir string) int {
 		return 2
 	}
 
+	// Resolve the Model Provider factory before any orchestrator construction or infrastructure
+	// load, so a missing/invalid --provider selection (including missing Bedrock config or
+	// credentials) fails fast with no partial side effects.
+	providerFactory, err := selectProviderFactory(context.Background(), *provider)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "harness-demo: %v\n", err)
+		return 2
+	}
+
 	caseStore, ruleStore, err := labtools.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "harness-demo: labtools.Load: %v\n", err)
@@ -83,7 +93,7 @@ func run(args []string, outDir string) int {
 	sink := newEventSink()
 
 	orch, err := caseflow.NewOrchestrator(
-		demoProviderFactory,
+		providerFactory,
 		registry,
 		gate,
 		caseflow.AllAgentDefinitions(),

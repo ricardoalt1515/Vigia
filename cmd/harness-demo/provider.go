@@ -3,9 +3,43 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 
 	"github.com/ricardoalt1515/vigia/internal/harness"
+	"github.com/ricardoalt1515/vigia/internal/harness/bedrock"
+	"github.com/ricardoalt1515/vigia/internal/harness/caseflow"
 )
+
+// newBedrockFactory is a test seam: production code always resolves to bedrock.NewFactory.
+// Tests override this package variable to inject a fake/mock Bedrock construction path so a
+// full CLI run can be exercised deterministically with no live AWS network call or credentials.
+var newBedrockFactory = bedrock.NewFactory
+
+// selectProviderFactory resolves the caseflow.ProviderFactory to use for a run, based on the
+// --provider flag value. "fake" (or an empty string, the flag's default) returns
+// demoProviderFactory unchanged, with no Bedrock construction attempted. "bedrock" reads
+// AWS_REGION and BEDROCK_MODEL_ID directly via os.LookupEnv — intentionally not
+// internal/config.Load/LoadFromEnv, which unconditionally requires unrelated DATABASE_URL and
+// OBJECT_STORE_* keys that would regress this DB-free demo CLI — and delegates to
+// bedrock.NewFactory (via the newBedrockFactory seam). Any other value is a usage error.
+func selectProviderFactory(ctx context.Context, provider string) (caseflow.ProviderFactory, error) {
+	switch provider {
+	case "", "fake":
+		return demoProviderFactory, nil
+	case "bedrock":
+		region, _ := os.LookupEnv("AWS_REGION")
+		modelID, _ := os.LookupEnv("BEDROCK_MODEL_ID")
+
+		factory, err := newBedrockFactory(ctx, bedrock.Options{Region: region, ModelID: modelID})
+		if err != nil {
+			return nil, err
+		}
+		return factory, nil
+	default:
+		return nil, fmt.Errorf("unknown --provider value %q, want \"fake\" or \"bedrock\"", provider)
+	}
+}
 
 // scriptedProvider is a queued Fake harness.ModelProvider for the demo CLI. It mirrors the #20
 // e2e test's caseflowQueuedProvider pattern but lives in package main so demo data never enters
