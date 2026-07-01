@@ -232,6 +232,11 @@ file under `cmd/harness-demo/`.
 - [x] **STOP: commit Slice 1 as one work-unit commit before starting Slice 2**, using a
   conventional commit message (no AI attribution trailer). Slice 2 depends on `bedrock.NewFactory`
   and `ErrMissingConfig` existing and green.
+- [x] Post-verify follow-up: added `internal/harness/bedrock/orchestrator_integration_test.go`
+  (`TestOrchestrator_BedrockAdapterErrorReachesFailureReason`) wiring a real `bedrock.Provider`
+  (fake invoker, throttling exception) into a real `caseflow.Orchestrator` run, closing the
+  `sdd-verify` WARNING that no test proved the two compose end-to-end for
+  `CaseBrief.FailureReason`.
 
 ---
 
