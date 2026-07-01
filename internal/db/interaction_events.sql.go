@@ -123,15 +123,11 @@ const listCurrentTenantInteractionsWithOutcome = `-- name: ListCurrentTenantInte
 SELECT
     ie.id, ie.tenant_id, ie.debtor_id, ie.channel, ie.direction, ie.status,
     ie.occurred_at, ie.transcript_ref, ie.debtor_timezone, ie.created_at,
-    e.overall_outcome
+    e.overall_outcome,
+    dr.result_payload ->> 'rationale' AS reason
 FROM interaction_events ie
-LEFT JOIN LATERAL (
-    SELECT overall_outcome
-    FROM evaluations
-    WHERE evaluations.interaction_event_id = ie.id
-    ORDER BY created_at DESC
-    LIMIT 1
-) e ON true
+LEFT JOIN evaluations e ON e.interaction_event_id = ie.id
+LEFT JOIN detector_result_rows dr ON dr.evaluation_id = e.id
 ORDER BY ie.occurred_at DESC
 LIMIT $1
 `
@@ -147,9 +143,15 @@ type ListCurrentTenantInteractionsWithOutcomeRow struct {
 	TranscriptRef  *string            `json:"transcript_ref"`
 	DebtorTimezone string             `json:"debtor_timezone"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	OverallOutcome string             `json:"overall_outcome"`
+	OverallOutcome *string            `json:"overall_outcome"`
+	Reason         interface{}        `json:"reason"`
 }
 
+// Evaluation runs synchronously, once, at ingest time for this change (#2):
+// at most one evaluations row per interaction and at most one
+// detector_result_rows row per evaluation, so a plain LEFT JOIN (no
+// LATERAL/window function) is sufficient and keeps sqlc's nullability
+// inference accurate for overall_outcome/reason.
 func (q *Queries) ListCurrentTenantInteractionsWithOutcome(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsWithOutcomeRow, error) {
 	rows, err := q.db.Query(ctx, listCurrentTenantInteractionsWithOutcome, limit)
 	if err != nil {
@@ -171,6 +173,7 @@ func (q *Queries) ListCurrentTenantInteractionsWithOutcome(ctx context.Context, 
 			&i.DebtorTimezone,
 			&i.CreatedAt,
 			&i.OverallOutcome,
+			&i.Reason,
 		); err != nil {
 			return nil, err
 		}

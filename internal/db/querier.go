@@ -25,6 +25,11 @@ type Querier interface {
 	GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error)
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
 	ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsRow, error)
+	// Evaluation runs synchronously, once, at ingest time for this change (#2):
+	// at most one evaluations row per interaction and at most one
+	// detector_result_rows row per evaluation, so a plain LEFT JOIN (no
+	// LATERAL/window function) is sufficient and keeps sqlc's nullability
+	// inference accurate for overall_outcome/reason.
 	ListCurrentTenantInteractionsWithOutcome(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsWithOutcomeRow, error)
 	ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDebtorsByTenantRow, error)
 	ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDetectorResultRowsByTenantRow, error)

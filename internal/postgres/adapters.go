@@ -86,7 +86,7 @@ func (b poolBeginner) Begin(ctx context.Context) (tenantdb.Tx, error) {
 func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID string) ([]httpapi.Interaction, error) {
 	var items []httpapi.Interaction
 	err := tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
-		rows, err := vigiaDB.New(tx).ListCurrentTenantInteractions(ctx, r.limit)
+		rows, err := vigiaDB.New(tx).ListCurrentTenantInteractionsWithOutcome(ctx, r.limit)
 		if err != nil {
 			return err
 		}
@@ -97,6 +97,8 @@ func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID strin
 				OccurredAt: row.OccurredAt.Time,
 				Channel:    row.Channel,
 				Direction:  row.Direction,
+				Outcome:    outcomeToAPI(row.OverallOutcome),
+				Reason:     reasonToAPI(row.Reason),
 			})
 		}
 		return nil
@@ -105,6 +107,41 @@ func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID strin
 		return nil, err
 	}
 	return items, nil
+}
+
+// outcomeToAPI is the single place that upper-cases the persisted
+// overall_outcome for the JSON boundary: "pass" -> "PASS", "fail" -> "BLOCK".
+// A missing (unevaluated) row stays nil — never a fabricated "PASS".
+func outcomeToAPI(overallOutcome *string) *string {
+	if overallOutcome == nil {
+		return nil
+	}
+	var upper string
+	switch *overallOutcome {
+	case "pass":
+		upper = "PASS"
+	case "fail":
+		upper = "BLOCK"
+	default:
+		return nil
+	}
+	return &upper
+}
+
+// reasonToAPI narrows the sqlc-generated `interface{}` for the ->> jsonb
+// text-extraction column (see db/queries/interaction_events.sql) to *string.
+func reasonToAPI(reason any) *string {
+	if reason == nil {
+		return nil
+	}
+	switch v := reason.(type) {
+	case string:
+		return &v
+	case *string:
+		return v
+	default:
+		return nil
+	}
 }
 
 func uuidString(id pgtype.UUID) string {
@@ -197,3 +234,36 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 }
 
 var _ evaluation.EvaluationStore = (*EvaluationStore)(nil)
+
+// SummaryReader returns the tenant's out-of-hours (BLOCK) evaluation count
+// via a SQL aggregate, computed inside the tenant-scoped transaction so RLS
+// enforces isolation.
+type SummaryReader struct {
+	db tenantdb.Beginner
+}
+
+func NewSummaryReader(db tenantdb.Beginner) *SummaryReader {
+	return &SummaryReader{db: db}
+}
+
+func NewSummaryReaderFromPool(pool *pgxpool.Pool) *SummaryReader {
+	return NewSummaryReader(poolBeginner{pool: pool})
+}
+
+func (r *SummaryReader) CountOutOfHours(ctx context.Context, tenantID string) (int64, error) {
+	var count int64
+	err := tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		n, err := vigiaDB.New(tx).CountOutOfHoursEvaluations(ctx)
+		if err != nil {
+			return err
+		}
+		count = n
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+var _ httpapi.SummaryReader = (*SummaryReader)(nil)

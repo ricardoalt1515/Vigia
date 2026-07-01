@@ -16,17 +16,18 @@ ORDER BY occurred_at DESC
 LIMIT $1;
 
 -- name: ListCurrentTenantInteractionsWithOutcome :many
+-- Evaluation runs synchronously, once, at ingest time for this change (#2):
+-- at most one evaluations row per interaction and at most one
+-- detector_result_rows row per evaluation, so a plain LEFT JOIN (no
+-- LATERAL/window function) is sufficient and keeps sqlc's nullability
+-- inference accurate for overall_outcome/reason.
 SELECT
     ie.id, ie.tenant_id, ie.debtor_id, ie.channel, ie.direction, ie.status,
     ie.occurred_at, ie.transcript_ref, ie.debtor_timezone, ie.created_at,
-    e.overall_outcome
+    e.overall_outcome,
+    dr.result_payload ->> 'rationale' AS reason
 FROM interaction_events ie
-LEFT JOIN LATERAL (
-    SELECT overall_outcome
-    FROM evaluations
-    WHERE evaluations.interaction_event_id = ie.id
-    ORDER BY created_at DESC
-    LIMIT 1
-) e ON true
+LEFT JOIN evaluations e ON e.interaction_event_id = ie.id
+LEFT JOIN detector_result_rows dr ON dr.evaluation_id = e.id
 ORDER BY ie.occurred_at DESC
 LIMIT $1;
