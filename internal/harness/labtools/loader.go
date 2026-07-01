@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
+	"strings"
+	"time"
 )
 
 var (
-	emailRegex = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
-	phoneRegex = regexp.MustCompile(`[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4,6}`)
+	emailRegex   = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
+	phoneRegex   = regexp.MustCompile(`[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4,6}`)
+	curpRegex    = regexp.MustCompile(`\b[A-Z][AEIOUX][A-Z]{2}\d{6}[HM][A-Z]{5}[A-Z0-9]\d\b`)
+	rfcRegex     = regexp.MustCompile(`\b[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}\b`)
+	accountRegex = regexp.MustCompile(`\b\d{12,20}\b`)
 )
 
 // Load reads all embedded fixture files, validates them, and returns populated stores.
@@ -41,6 +46,9 @@ func loadRulesFrom(fsys fs.FS) (RuleStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("glob rules: %w", err)
 	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no rule fixtures found")
+	}
 	store := make(RuleStore)
 	for _, path := range entries {
 		data, err := fs.ReadFile(fsys, path)
@@ -54,6 +62,9 @@ func loadRulesFrom(fsys fs.FS) (RuleStore, error) {
 		if err := validateRule(rule); err != nil {
 			return nil, fmt.Errorf("invalid rule in %s: %w", path, err)
 		}
+		if _, exists := store[rule.Code]; exists {
+			return nil, fmt.Errorf("invalid rule in %s: duplicate rule code %q", path, rule.Code)
+		}
 		store[rule.Code] = rule
 	}
 	return store, nil
@@ -63,6 +74,9 @@ func loadCasesFrom(fsys fs.FS, ruleStore RuleStore) (CaseStore, error) {
 	entries, err := fs.Glob(fsys, "fixtures/cases/*.json")
 	if err != nil {
 		return nil, fmt.Errorf("glob cases: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no case fixtures found")
 	}
 	store := make(CaseStore)
 	for _, path := range entries {
@@ -77,69 +91,104 @@ func loadCasesFrom(fsys fs.FS, ruleStore RuleStore) (CaseStore, error) {
 		if err := validateCase(c, ruleStore); err != nil {
 			return nil, fmt.Errorf("invalid case in %s: %w", path, err)
 		}
+		if _, exists := store[c.CaseID]; exists {
+			return nil, fmt.Errorf("invalid case in %s: duplicate case_id %q", path, c.CaseID)
+		}
 		store[c.CaseID] = c
 	}
 	return store, nil
 }
 
 func validateRule(r SyntheticRule) error {
-	if r.Code == "" {
+	if blank(r.Code) {
 		return fmt.Errorf("rule.code is empty")
 	}
-	if r.Title == "" {
+	if blank(r.Title) {
 		return fmt.Errorf("rule %q: title is empty", r.Code)
 	}
-	if r.Severity == "" {
+	if blank(r.Severity) {
 		return fmt.Errorf("rule %q: severity is empty", r.Code)
 	}
 	return nil
 }
 
 func validateCase(c SyntheticCase, ruleStore RuleStore) error {
-	if c.CaseID == "" {
+	if blank(c.CaseID) {
 		return fmt.Errorf("case_id is empty")
 	}
-	if c.TenantID == "" {
+	if blank(c.TenantID) {
 		return fmt.Errorf("case %q: tenant_id is empty", c.CaseID)
 	}
-	if c.Channel == "" {
+	if blank(c.Debtor.Label) {
+		return fmt.Errorf("case %q: debtor.label is empty", c.CaseID)
+	}
+	if blank(c.Collector.DespachoID) {
+		return fmt.Errorf("case %q: collector.despacho_id is empty", c.CaseID)
+	}
+	if blank(c.Collector.Label) {
+		return fmt.Errorf("case %q: collector.label is empty", c.CaseID)
+	}
+	if blank(c.Channel) {
 		return fmt.Errorf("case %q: channel is empty", c.CaseID)
 	}
-	if c.OccurredAt == "" {
+	if blank(c.OccurredAt) {
 		return fmt.Errorf("case %q: occurred_at is empty", c.CaseID)
 	}
-	if c.DebtorTimezone == "" {
+	if _, err := time.Parse(time.RFC3339, c.OccurredAt); err != nil {
+		return fmt.Errorf("case %q: occurred_at must be RFC3339: %w", c.CaseID, err)
+	}
+	if blank(c.DebtorTimezone) {
 		return fmt.Errorf("case %q: debtor_timezone is empty", c.CaseID)
+	}
+	if _, err := time.LoadLocation(c.DebtorTimezone); err != nil {
+		return fmt.Errorf("case %q: debtor_timezone must be valid IANA timezone: %w", c.CaseID, err)
 	}
 	if len(c.Transcript) == 0 {
 		return fmt.Errorf("case %q: transcript is empty", c.CaseID)
 	}
 	for i, u := range c.Transcript {
-		if u.Speaker == "" {
+		if blank(u.Speaker) {
 			return fmt.Errorf("case %q: transcript[%d].speaker is empty", c.CaseID, i)
 		}
-		if u.Text == "" {
+		if blank(u.Text) {
 			return fmt.Errorf("case %q: transcript[%d].text is empty", c.CaseID, i)
 		}
 	}
-	// No-PII shape validation on debtor.label
-	if emailRegex.MatchString(c.Debtor.Label) {
-		return fmt.Errorf("case %q: debtor.label matches email pattern (PII risk): %q", c.CaseID, c.Debtor.Label)
+	if len(c.DetectorResults) == 0 {
+		return fmt.Errorf("case %q: detector_results is empty", c.CaseID)
 	}
-	if phoneRegex.MatchString(c.Debtor.Label) {
-		return fmt.Errorf("case %q: debtor.label matches phone pattern (PII risk): %q", c.CaseID, c.Debtor.Label)
+	for i, dr := range c.DetectorResults {
+		if blank(dr.RuleCode) {
+			return fmt.Errorf("case %q: detector_results[%d].rule_code is empty", c.CaseID, i)
+		}
+		if blank(dr.DetectorKind) {
+			return fmt.Errorf("case %q: detector_results[%d].detector_kind is empty", c.CaseID, i)
+		}
+		if blank(dr.Outcome) {
+			return fmt.Errorf("case %q: detector_results[%d].outcome is empty", c.CaseID, i)
+		}
 	}
-	// Rule-reference integrity: every applicable_rule_id must resolve
-	for _, ruleCode := range c.ApplicableRuleIDs {
+	if len(c.ApplicableRuleIDs) == 0 {
+		return fmt.Errorf("case %q: applicable_rule_ids is empty", c.CaseID)
+	}
+	for i, ruleCode := range c.ApplicableRuleIDs {
+		if blank(ruleCode) {
+			return fmt.Errorf("case %q: applicable_rule_ids[%d] is empty", c.CaseID, i)
+		}
 		if _, ok := ruleStore[ruleCode]; !ok {
 			return fmt.Errorf("case %q: applicable_rule_id %q not found in rule store", c.CaseID, ruleCode)
 		}
 	}
-	// Rule-reference integrity: every detector_result.rule_code must resolve
 	for _, dr := range c.DetectorResults {
 		if _, ok := ruleStore[dr.RuleCode]; !ok {
 			return fmt.Errorf("case %q: detector_result rule_code %q not found in rule store", c.CaseID, dr.RuleCode)
 		}
+	}
+	if c.EvidenceMetadata == nil {
+		return fmt.Errorf("case %q: evidence_metadata is required and must be an object", c.CaseID)
+	}
+	if err := validateNoPIIStrings(c); err != nil {
+		return fmt.Errorf("case %q: %w", c.CaseID, err)
 	}
 	return nil
 }
@@ -158,4 +207,108 @@ func validateNoOrphanRules(caseStore CaseStore, ruleStore RuleStore) error {
 		}
 	}
 	return nil
+}
+
+func blank(s string) bool {
+	return strings.TrimSpace(s) == ""
+}
+
+func validateNoPIIStrings(c SyntheticCase) error {
+	checks := []struct {
+		path  string
+		value string
+	}{
+		{"case_id", c.CaseID},
+		{"tenant_id", c.TenantID},
+		{"debtor.label", c.Debtor.Label},
+		{"collector.despacho_id", c.Collector.DespachoID},
+		{"collector.label", c.Collector.Label},
+		{"channel", c.Channel},
+		{"occurred_at", c.OccurredAt},
+		{"debtor_timezone", c.DebtorTimezone},
+	}
+	for i, u := range c.Transcript {
+		checks = append(checks,
+			struct {
+				path  string
+				value string
+			}{fmt.Sprintf("transcript[%d].speaker", i), u.Speaker},
+			struct {
+				path  string
+				value string
+			}{fmt.Sprintf("transcript[%d].text", i), u.Text},
+		)
+	}
+	for i, dr := range c.DetectorResults {
+		checks = append(checks,
+			struct {
+				path  string
+				value string
+			}{fmt.Sprintf("detector_results[%d].rule_code", i), dr.RuleCode},
+			struct {
+				path  string
+				value string
+			}{fmt.Sprintf("detector_results[%d].detector_kind", i), dr.DetectorKind},
+			struct {
+				path  string
+				value string
+			}{fmt.Sprintf("detector_results[%d].outcome", i), dr.Outcome},
+		)
+	}
+	for i, ruleID := range c.ApplicableRuleIDs {
+		checks = append(checks, struct {
+			path  string
+			value string
+		}{fmt.Sprintf("applicable_rule_ids[%d]", i), ruleID})
+	}
+	for _, check := range checks {
+		if err := validateNoPIIString(check.path, check.value); err != nil {
+			return err
+		}
+	}
+	return validateNoPIIValue("evidence_metadata", c.EvidenceMetadata)
+}
+
+func validateNoPIIValue(path string, value any) error {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case string:
+		return validateNoPIIString(path, v)
+	case []any:
+		for i, item := range v {
+			if err := validateNoPIIValue(fmt.Sprintf("%s[%d]", path, i), item); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		for key, item := range v {
+			keyPath := fmt.Sprintf("%s.%s", path, key)
+			if err := validateNoPIIString(keyPath+" key", key); err != nil {
+				return err
+			}
+			if err := validateNoPIIValue(keyPath, item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateNoPIIString(path, value string) error {
+	upper := strings.ToUpper(value)
+	switch {
+	case emailRegex.MatchString(value):
+		return fmt.Errorf("%s matches email pattern (PII risk): %q", path, value)
+	case accountRegex.MatchString(value):
+		return fmt.Errorf("%s matches account-number pattern (PII risk): %q", path, value)
+	case phoneRegex.MatchString(value):
+		return fmt.Errorf("%s matches phone pattern (PII risk): %q", path, value)
+	case curpRegex.MatchString(upper):
+		return fmt.Errorf("%s matches CURP pattern (PII risk): %q", path, value)
+	case rfcRegex.MatchString(upper):
+		return fmt.Errorf("%s matches RFC pattern (PII risk): %q", path, value)
+	default:
+		return nil
+	}
 }

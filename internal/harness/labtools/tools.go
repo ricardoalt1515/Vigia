@@ -3,6 +3,7 @@ package labtools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/ricardoalt1515/vigia/internal/harness"
 )
@@ -167,6 +168,9 @@ func (t *DraftEvidenceManifestTool) Execute(ctx context.Context, call harness.To
 	if err != nil {
 		return harness.ToolResult{Status: harness.ToolStatusNotFound, Reason: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
+	if reason := validateDraftFields(req.CaseID, req.RuleCodes, req.Findings, "findings"); reason != "" {
+		return harness.ToolResult{Status: harness.ToolStatusNotFound, Reason: reason}, nil
+	}
 	resp := DraftEvidenceManifestResponse{
 		CaseID:        req.CaseID,
 		RuleCodes:     req.RuleCodes,
@@ -201,6 +205,9 @@ func (t *DraftSupervisorNoteTool) Execute(ctx context.Context, call harness.Tool
 	if err != nil {
 		return harness.ToolResult{Status: harness.ToolStatusNotFound, Reason: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
+	if reason := validateDraftFields(req.CaseID, req.RuleCodes, req.NoteBody, "note_body"); reason != "" {
+		return harness.ToolResult{Status: harness.ToolStatusNotFound, Reason: reason}, nil
+	}
 	resp := DraftSupervisorNoteResponse{
 		CaseID:        req.CaseID,
 		RuleCodes:     req.RuleCodes,
@@ -228,4 +235,22 @@ func Registry(cases CaseStore, rules RuleStore) harness.ToolRegistry {
 		"draft_evidence_manifest": &DraftEvidenceManifestTool{},
 		"draft_supervisor_note":   &DraftSupervisorNoteTool{},
 	}
+}
+
+func validateDraftFields(caseID string, ruleCodes []string, body string, bodyField string) string {
+	if strings.TrimSpace(caseID) == "" {
+		return "case_id is required"
+	}
+	if len(ruleCodes) == 0 {
+		return "rule_codes must contain at least one rule code"
+	}
+	for i, code := range ruleCodes {
+		if strings.TrimSpace(code) == "" {
+			return fmt.Sprintf("rule_codes[%d] is required", i)
+		}
+	}
+	if strings.TrimSpace(body) == "" {
+		return bodyField + " is required"
+	}
+	return ""
 }

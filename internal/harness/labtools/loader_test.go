@@ -2,6 +2,7 @@ package labtools
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -44,10 +45,19 @@ const validRule05JSON = `{
 
 func validTestFS() fstest.MapFS {
 	return fstest.MapFS{
-		"fixtures/cases/case.json":     {Data: []byte(validCaseJSON)},
-		"fixtures/rules/rule04.json":   {Data: []byte(validRule04JSON)},
-		"fixtures/rules/rule05.json":   {Data: []byte(validRule05JSON)},
+		"fixtures/cases/case.json":   {Data: []byte(validCaseJSON)},
+		"fixtures/rules/rule04.json": {Data: []byte(validRule04JSON)},
+		"fixtures/rules/rule05.json": {Data: []byte(validRule05JSON)},
 	}
+}
+
+func loadCaseJSONForTest(caseJSON string) error {
+	_, _, err := loadFrom(fstest.MapFS{
+		"fixtures/cases/case.json":   {Data: []byte(caseJSON)},
+		"fixtures/rules/rule04.json": {Data: []byte(validRule04JSON)},
+		"fixtures/rules/rule05.json": {Data: []byte(validRule05JSON)},
+	})
+	return err
 }
 
 func TestLoad_ValidEmbedded(t *testing.T) {
@@ -68,42 +78,42 @@ func TestLoad_ValidEmbedded(t *testing.T) {
 
 func TestLoad_MissingRequiredField(t *testing.T) {
 	cases := []struct {
-		name    string
+		name     string
 		caseJSON string
 		ruleJSON string
 	}{
 		{
-			name:    "empty case_id",
+			name:     "empty case_id",
 			caseJSON: `{"case_id": "", "tenant_id": "SYN-T", "debtor": {"label": "Debtor-Synthetic-001"}, "collector": {"despacho_id": "D", "label": "L"}, "transcript": [{"speaker": "s", "text": "t"}], "channel": "voice", "occurred_at": "2024-01-01T00:00:00Z", "debtor_timezone": "America/Mexico_City", "detector_results": [{"rule_code": "MX-REDECO-04", "detector_kind": "deterministic", "outcome": "hard_block"}], "applicable_rule_ids": ["MX-REDECO-04"], "evidence_metadata": {}}`,
 			ruleJSON: validRule04JSON,
 		},
 		{
-			name:    "empty tenant_id",
+			name:     "empty tenant_id",
 			caseJSON: `{"case_id": "C1", "tenant_id": "", "debtor": {"label": "Debtor-Synthetic-001"}, "collector": {"despacho_id": "D", "label": "L"}, "transcript": [{"speaker": "s", "text": "t"}], "channel": "voice", "occurred_at": "2024-01-01T00:00:00Z", "debtor_timezone": "America/Mexico_City", "detector_results": [{"rule_code": "MX-REDECO-04", "detector_kind": "deterministic", "outcome": "hard_block"}], "applicable_rule_ids": ["MX-REDECO-04"], "evidence_metadata": {}}`,
 			ruleJSON: validRule04JSON,
 		},
 		{
-			name:    "empty transcript",
+			name:     "empty transcript",
 			caseJSON: `{"case_id": "C1", "tenant_id": "SYN-T", "debtor": {"label": "Debtor-Synthetic-001"}, "collector": {"despacho_id": "D", "label": "L"}, "transcript": [], "channel": "voice", "occurred_at": "2024-01-01T00:00:00Z", "debtor_timezone": "America/Mexico_City", "detector_results": [{"rule_code": "MX-REDECO-04", "detector_kind": "deterministic", "outcome": "hard_block"}], "applicable_rule_ids": ["MX-REDECO-04"], "evidence_metadata": {}}`,
 			ruleJSON: validRule04JSON,
 		},
 		{
-			name:    "utterance with empty speaker",
+			name:     "utterance with empty speaker",
 			caseJSON: `{"case_id": "C1", "tenant_id": "SYN-T", "debtor": {"label": "Debtor-Synthetic-001"}, "collector": {"despacho_id": "D", "label": "L"}, "transcript": [{"speaker": "", "text": "hello"}], "channel": "voice", "occurred_at": "2024-01-01T00:00:00Z", "debtor_timezone": "America/Mexico_City", "detector_results": [{"rule_code": "MX-REDECO-04", "detector_kind": "deterministic", "outcome": "hard_block"}], "applicable_rule_ids": ["MX-REDECO-04"], "evidence_metadata": {}}`,
 			ruleJSON: validRule04JSON,
 		},
 		{
-			name:    "empty channel",
+			name:     "empty channel",
 			caseJSON: `{"case_id": "C1", "tenant_id": "SYN-T", "debtor": {"label": "Debtor-Synthetic-001"}, "collector": {"despacho_id": "D", "label": "L"}, "transcript": [{"speaker": "s", "text": "t"}], "channel": "", "occurred_at": "2024-01-01T00:00:00Z", "debtor_timezone": "America/Mexico_City", "detector_results": [{"rule_code": "MX-REDECO-04", "detector_kind": "deterministic", "outcome": "hard_block"}], "applicable_rule_ids": ["MX-REDECO-04"], "evidence_metadata": {}}`,
 			ruleJSON: validRule04JSON,
 		},
 		{
-			name:    "rule missing code",
+			name:     "rule missing code",
 			caseJSON: validCaseJSON,
 			ruleJSON: `{"code": "", "title": "T", "description": "D", "severity": "hard_block"}`,
 		},
 		{
-			name:    "rule missing severity",
+			name:     "rule missing severity",
 			caseJSON: validCaseJSON,
 			ruleJSON: `{"code": "MX-REDECO-04", "title": "T", "description": "D", "severity": ""}`,
 		},
@@ -117,6 +127,144 @@ func TestLoad_MissingRequiredField(t *testing.T) {
 			_, _, err := loadFrom(fsys)
 			if err == nil {
 				t.Errorf("loadFrom() expected error for %q, got nil", tc.name)
+			}
+		})
+	}
+}
+
+func TestLoad_DuplicateFixtureIdentifiers(t *testing.T) {
+	t.Run("duplicate case_id", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"fixtures/cases/case-a.json": {Data: []byte(validCaseJSON)},
+			"fixtures/cases/case-b.json": {Data: []byte(validCaseJSON)},
+			"fixtures/rules/rule04.json": {Data: []byte(validRule04JSON)},
+			"fixtures/rules/rule05.json": {Data: []byte(validRule05JSON)},
+		}
+		_, _, err := loadFrom(fsys)
+		if err == nil || !strings.Contains(err.Error(), "duplicate case_id") {
+			t.Fatalf("loadFrom() error = %v, want duplicate case_id", err)
+		}
+	})
+
+	t.Run("duplicate rule code", func(t *testing.T) {
+		fsys := fstest.MapFS{
+			"fixtures/cases/case.json":   {Data: []byte(validCaseJSON)},
+			"fixtures/rules/rule-a.json": {Data: []byte(validRule04JSON)},
+			"fixtures/rules/rule-b.json": {Data: []byte(validRule04JSON)},
+			"fixtures/rules/rule05.json": {Data: []byte(validRule05JSON)},
+		}
+		_, _, err := loadFrom(fsys)
+		if err == nil || !strings.Contains(err.Error(), "duplicate rule code") {
+			t.Fatalf("loadFrom() error = %v, want duplicate rule code", err)
+		}
+	})
+}
+
+func TestLoad_RejectsMalformedCaseShapes(t *testing.T) {
+	tests := []struct {
+		name       string
+		caseJSON   string
+		wantReason string
+	}{
+		{
+			name:       "empty debtor label",
+			caseJSON:   strings.Replace(validCaseJSON, `"label": "Debtor-Synthetic-001"`, `"label": ""`, 1),
+			wantReason: "debtor.label is empty",
+		},
+		{
+			name:       "empty collector label",
+			caseJSON:   strings.Replace(validCaseJSON, `"label": "Collector-Synthetic-001"`, `"label": ""`, 1),
+			wantReason: "collector.label is empty",
+		},
+		{
+			name:       "invalid occurred_at",
+			caseJSON:   strings.Replace(validCaseJSON, `"occurred_at": "2024-03-15T23:30:00-06:00"`, `"occurred_at": "2024-03-15 23:30:00"`, 1),
+			wantReason: "occurred_at must be RFC3339",
+		},
+		{
+			name:       "invalid debtor timezone",
+			caseJSON:   strings.Replace(validCaseJSON, `"debtor_timezone": "America/Mexico_City"`, `"debtor_timezone": "Mexico City"`, 1),
+			wantReason: "debtor_timezone must be valid IANA timezone",
+		},
+		{
+			name:       "empty detector results",
+			caseJSON:   strings.Replace(validCaseJSON, `"detector_results": [`, `"detector_results": [], "unused_detector_results": [`, 1),
+			wantReason: "detector_results is empty",
+		},
+		{
+			name:       "detector missing rule_code",
+			caseJSON:   strings.Replace(validCaseJSON, `"rule_code": "MX-REDECO-04"`, `"rule_code": ""`, 1),
+			wantReason: "detector_results[0].rule_code is empty",
+		},
+		{
+			name:       "detector missing detector_kind",
+			caseJSON:   strings.Replace(validCaseJSON, `"detector_kind": "deterministic"`, `"detector_kind": ""`, 1),
+			wantReason: "detector_results[0].detector_kind is empty",
+		},
+		{
+			name:       "detector missing outcome",
+			caseJSON:   strings.Replace(validCaseJSON, `"outcome": "hard_block"`, `"outcome": ""`, 1),
+			wantReason: "detector_results[0].outcome is empty",
+		},
+		{
+			name:       "empty applicable_rule_ids",
+			caseJSON:   strings.Replace(validCaseJSON, `"applicable_rule_ids": ["MX-REDECO-04", "MX-REDECO-05"]`, `"applicable_rule_ids": []`, 1),
+			wantReason: "applicable_rule_ids is empty",
+		},
+		{
+			name: "missing evidence metadata",
+			caseJSON: strings.Replace(validCaseJSON, `,
+	"evidence_metadata": {"status": "pending", "record_id": null}`, ``, 1),
+			wantReason: "evidence_metadata is required",
+		},
+		{
+			name:       "null evidence metadata",
+			caseJSON:   strings.Replace(validCaseJSON, `"evidence_metadata": {"status": "pending", "record_id": null}`, `"evidence_metadata": null`, 1),
+			wantReason: "evidence_metadata is required",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := loadCaseJSONForTest(tc.caseJSON)
+			if err == nil || !strings.Contains(err.Error(), tc.wantReason) {
+				t.Fatalf("loadFrom() error = %v, want to contain %q", err, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsPIIShapedCaseStrings(t *testing.T) {
+	tests := []struct {
+		name       string
+		caseJSON   string
+		wantReason string
+	}{
+		{
+			name:       "transcript email",
+			caseJSON:   strings.Replace(validCaseJSON, "Please call back during hours.", "Email me at debtor@example.com.", 1),
+			wantReason: "transcript[1].text matches email pattern",
+		},
+		{
+			name:       "collector phone",
+			caseJSON:   strings.Replace(validCaseJSON, "Collector-Synthetic-001", "555-123-4567", 1),
+			wantReason: "collector.label matches phone pattern",
+		},
+		{
+			name:       "metadata RFC",
+			caseJSON:   strings.Replace(validCaseJSON, `"record_id": null`, `"reviewer_rfc": "GODE561231GR8"`, 1),
+			wantReason: "evidence_metadata.reviewer_rfc matches RFC pattern",
+		},
+		{
+			name:       "metadata account number",
+			caseJSON:   strings.Replace(validCaseJSON, `"record_id": null`, `"account": "123456789012"`, 1),
+			wantReason: "evidence_metadata.account matches account-number pattern",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := loadCaseJSONForTest(tc.caseJSON)
+			if err == nil || !strings.Contains(err.Error(), tc.wantReason) {
+				t.Fatalf("loadFrom() error = %v, want to contain %q", err, tc.wantReason)
 			}
 		})
 	}
@@ -232,9 +380,9 @@ func TestLoad_NoOrphanRules(t *testing.T) {
 		"severity": "hard_block"
 	}`
 	fsys := fstest.MapFS{
-		"fixtures/cases/case.json":         {Data: []byte(caseJSON)},
-		"fixtures/rules/rule04.json":        {Data: []byte(validRule04JSON)},
-		"fixtures/rules/rule-orphan.json":   {Data: []byte(orphanRuleJSON)},
+		"fixtures/cases/case.json":        {Data: []byte(caseJSON)},
+		"fixtures/rules/rule04.json":      {Data: []byte(validRule04JSON)},
+		"fixtures/rules/rule-orphan.json": {Data: []byte(orphanRuleJSON)},
 	}
 	_, _, err := loadFrom(fsys)
 	if err == nil {

@@ -3,6 +3,7 @@ package labtools
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ricardoalt1515/vigia/internal/harness"
@@ -47,6 +48,66 @@ func TestDraftEvidenceManifestTool_HappyPath(t *testing.T) {
 	// persisted must be false
 	if got, _ := result.Output["persisted"].(bool); got {
 		t.Error("persisted must be false")
+	}
+}
+
+func TestDraftEvidenceManifestTool_RejectsEmptyRequiredFields(t *testing.T) {
+	tool := &DraftEvidenceManifestTool{}
+	tests := []struct {
+		name       string
+		input      map[string]any
+		wantReason string
+	}{
+		{
+			name: "empty case_id",
+			input: map[string]any{
+				"case_id":    "",
+				"rule_codes": []any{"MX-REDECO-04"},
+				"findings":   "Out-of-hours contact detected",
+			},
+			wantReason: "case_id is required",
+		},
+		{
+			name: "empty rule_codes",
+			input: map[string]any{
+				"case_id":    "CASE-SYN-001",
+				"rule_codes": []any{},
+				"findings":   "Out-of-hours contact detected",
+			},
+			wantReason: "rule_codes must contain at least one rule code",
+		},
+		{
+			name: "empty rule code item",
+			input: map[string]any{
+				"case_id":    "CASE-SYN-001",
+				"rule_codes": []any{""},
+				"findings":   "Out-of-hours contact detected",
+			},
+			wantReason: "rule_codes[0] is required",
+		},
+		{
+			name: "empty findings",
+			input: map[string]any{
+				"case_id":    "CASE-SYN-001",
+				"rule_codes": []any{"MX-REDECO-04"},
+				"findings":   " ",
+			},
+			wantReason: "findings is required",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := tool.Execute(context.Background(), harness.ToolCall{Name: "draft_evidence_manifest", Input: tc.input})
+			if err != nil {
+				t.Fatalf("Execute returned error: %v", err)
+			}
+			if result.Status == harness.ToolStatusSuccess {
+				t.Fatal("status must not be success for empty required draft field")
+			}
+			if !strings.Contains(result.Reason, tc.wantReason) {
+				t.Fatalf("reason = %q, want to contain %q", result.Reason, tc.wantReason)
+			}
+		})
 	}
 }
 
@@ -133,6 +194,66 @@ func TestDraftSupervisorNoteTool_ProposedAt(t *testing.T) {
 	got, _ := result.Output["proposed_at"].(string)
 	if got != draftProposedAt {
 		t.Errorf("proposed_at = %q, want fixed constant %q", got, draftProposedAt)
+	}
+}
+
+func TestDraftSupervisorNoteTool_RejectsEmptyRequiredFields(t *testing.T) {
+	tool := &DraftSupervisorNoteTool{}
+	tests := []struct {
+		name       string
+		input      map[string]any
+		wantReason string
+	}{
+		{
+			name: "empty case_id",
+			input: map[string]any{
+				"case_id":    "",
+				"rule_codes": []any{"MX-REDECO-05"},
+				"note_body":  "Supervisor review required",
+			},
+			wantReason: "case_id is required",
+		},
+		{
+			name: "empty rule_codes",
+			input: map[string]any{
+				"case_id":    "CASE-SYN-001",
+				"rule_codes": []any{},
+				"note_body":  "Supervisor review required",
+			},
+			wantReason: "rule_codes must contain at least one rule code",
+		},
+		{
+			name: "empty rule code item",
+			input: map[string]any{
+				"case_id":    "CASE-SYN-001",
+				"rule_codes": []any{""},
+				"note_body":  "Supervisor review required",
+			},
+			wantReason: "rule_codes[0] is required",
+		},
+		{
+			name: "empty note_body",
+			input: map[string]any{
+				"case_id":    "CASE-SYN-001",
+				"rule_codes": []any{"MX-REDECO-05"},
+				"note_body":  " ",
+			},
+			wantReason: "note_body is required",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := tool.Execute(context.Background(), harness.ToolCall{Name: "draft_supervisor_note", Input: tc.input})
+			if err != nil {
+				t.Fatalf("Execute returned error: %v", err)
+			}
+			if result.Status == harness.ToolStatusSuccess {
+				t.Fatal("status must not be success for empty required draft field")
+			}
+			if !strings.Contains(result.Reason, tc.wantReason) {
+				t.Fatalf("reason = %q, want to contain %q", result.Reason, tc.wantReason)
+			}
+		})
 	}
 }
 
