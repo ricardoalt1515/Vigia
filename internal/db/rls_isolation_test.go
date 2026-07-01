@@ -87,8 +87,8 @@ func createDebtorForRLS(t *testing.T, ctx context.Context, db *pgx.Conn, tenantI
 	t.Helper()
 	var id string
 	if err := db.QueryRow(ctx, `
-		INSERT INTO debtors (tenant_id, external_ref, display_name)
-		VALUES ($1, $2, $3)
+		INSERT INTO debtors (tenant_id, external_ref, display_name, timezone)
+		VALUES ($1, $2, $3, 'America/Mexico_City')
 		RETURNING id
 	`, tenantID, externalRef, externalRef).Scan(&id); err != nil {
 		t.Fatalf("create debtor: %v", err)

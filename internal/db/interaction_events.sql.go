@@ -12,22 +12,36 @@ import (
 )
 
 const createInteractionEvent = `-- name: CreateInteractionEvent :one
-INSERT INTO interaction_events (tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, created_at
+INSERT INTO interaction_events (tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
 `
 
 type CreateInteractionEventParams struct {
-	TenantID      pgtype.UUID        `json:"tenant_id"`
-	DebtorID      pgtype.UUID        `json:"debtor_id"`
-	Channel       string             `json:"channel"`
-	Direction     string             `json:"direction"`
-	Status        string             `json:"status"`
-	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
-	TranscriptRef *string            `json:"transcript_ref"`
+	TenantID       pgtype.UUID        `json:"tenant_id"`
+	DebtorID       pgtype.UUID        `json:"debtor_id"`
+	Channel        string             `json:"channel"`
+	Direction      string             `json:"direction"`
+	Status         string             `json:"status"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef  *string            `json:"transcript_ref"`
+	DebtorTimezone string             `json:"debtor_timezone"`
 }
 
-func (q *Queries) CreateInteractionEvent(ctx context.Context, arg CreateInteractionEventParams) (InteractionEvent, error) {
+type CreateInteractionEventRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	TenantID       pgtype.UUID        `json:"tenant_id"`
+	DebtorID       pgtype.UUID        `json:"debtor_id"`
+	Channel        string             `json:"channel"`
+	Direction      string             `json:"direction"`
+	Status         string             `json:"status"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef  *string            `json:"transcript_ref"`
+	DebtorTimezone string             `json:"debtor_timezone"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreateInteractionEvent(ctx context.Context, arg CreateInteractionEventParams) (CreateInteractionEventRow, error) {
 	row := q.db.QueryRow(ctx, createInteractionEvent,
 		arg.TenantID,
 		arg.DebtorID,
@@ -36,8 +50,9 @@ func (q *Queries) CreateInteractionEvent(ctx context.Context, arg CreateInteract
 		arg.Status,
 		arg.OccurredAt,
 		arg.TranscriptRef,
+		arg.DebtorTimezone,
 	)
-	var i InteractionEvent
+	var i CreateInteractionEventRow
 	err := row.Scan(
 		&i.ID,
 		&i.TenantID,
@@ -47,27 +62,41 @@ func (q *Queries) CreateInteractionEvent(ctx context.Context, arg CreateInteract
 		&i.Status,
 		&i.OccurredAt,
 		&i.TranscriptRef,
+		&i.DebtorTimezone,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listCurrentTenantInteractions = `-- name: ListCurrentTenantInteractions :many
-SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, created_at
+SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
 FROM interaction_events
 ORDER BY occurred_at DESC
 LIMIT $1
 `
 
-func (q *Queries) ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]InteractionEvent, error) {
+type ListCurrentTenantInteractionsRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	TenantID       pgtype.UUID        `json:"tenant_id"`
+	DebtorID       pgtype.UUID        `json:"debtor_id"`
+	Channel        string             `json:"channel"`
+	Direction      string             `json:"direction"`
+	Status         string             `json:"status"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef  *string            `json:"transcript_ref"`
+	DebtorTimezone string             `json:"debtor_timezone"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsRow, error) {
 	rows, err := q.db.Query(ctx, listCurrentTenantInteractions, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []InteractionEvent
+	var items []ListCurrentTenantInteractionsRow
 	for rows.Next() {
-		var i InteractionEvent
+		var i ListCurrentTenantInteractionsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.TenantID,
@@ -77,6 +106,7 @@ func (q *Queries) ListCurrentTenantInteractions(ctx context.Context, limit int32
 			&i.Status,
 			&i.OccurredAt,
 			&i.TranscriptRef,
+			&i.DebtorTimezone,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -89,22 +119,46 @@ func (q *Queries) ListCurrentTenantInteractions(ctx context.Context, limit int32
 	return items, nil
 }
 
-const listInteractionEventsByTenant = `-- name: ListInteractionEventsByTenant :many
-SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, created_at
-FROM interaction_events
-WHERE tenant_id = $1
-ORDER BY occurred_at DESC
+const listCurrentTenantInteractionsWithOutcome = `-- name: ListCurrentTenantInteractionsWithOutcome :many
+SELECT
+    ie.id, ie.tenant_id, ie.debtor_id, ie.channel, ie.direction, ie.status,
+    ie.occurred_at, ie.transcript_ref, ie.debtor_timezone, ie.created_at,
+    e.overall_outcome
+FROM interaction_events ie
+LEFT JOIN LATERAL (
+    SELECT overall_outcome
+    FROM evaluations
+    WHERE evaluations.interaction_event_id = ie.id
+    ORDER BY created_at DESC
+    LIMIT 1
+) e ON true
+ORDER BY ie.occurred_at DESC
+LIMIT $1
 `
 
-func (q *Queries) ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]InteractionEvent, error) {
-	rows, err := q.db.Query(ctx, listInteractionEventsByTenant, tenantID)
+type ListCurrentTenantInteractionsWithOutcomeRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	TenantID       pgtype.UUID        `json:"tenant_id"`
+	DebtorID       pgtype.UUID        `json:"debtor_id"`
+	Channel        string             `json:"channel"`
+	Direction      string             `json:"direction"`
+	Status         string             `json:"status"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef  *string            `json:"transcript_ref"`
+	DebtorTimezone string             `json:"debtor_timezone"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	OverallOutcome string             `json:"overall_outcome"`
+}
+
+func (q *Queries) ListCurrentTenantInteractionsWithOutcome(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsWithOutcomeRow, error) {
+	rows, err := q.db.Query(ctx, listCurrentTenantInteractionsWithOutcome, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []InteractionEvent
+	var items []ListCurrentTenantInteractionsWithOutcomeRow
 	for rows.Next() {
-		var i InteractionEvent
+		var i ListCurrentTenantInteractionsWithOutcomeRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.TenantID,
@@ -114,6 +168,59 @@ func (q *Queries) ListInteractionEventsByTenant(ctx context.Context, tenantID pg
 			&i.Status,
 			&i.OccurredAt,
 			&i.TranscriptRef,
+			&i.DebtorTimezone,
+			&i.CreatedAt,
+			&i.OverallOutcome,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInteractionEventsByTenant = `-- name: ListInteractionEventsByTenant :many
+SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
+FROM interaction_events
+WHERE tenant_id = $1
+ORDER BY occurred_at DESC
+`
+
+type ListInteractionEventsByTenantRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	TenantID       pgtype.UUID        `json:"tenant_id"`
+	DebtorID       pgtype.UUID        `json:"debtor_id"`
+	Channel        string             `json:"channel"`
+	Direction      string             `json:"direction"`
+	Status         string             `json:"status"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef  *string            `json:"transcript_ref"`
+	DebtorTimezone string             `json:"debtor_timezone"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListInteractionEventsByTenantRow, error) {
+	rows, err := q.db.Query(ctx, listInteractionEventsByTenant, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListInteractionEventsByTenantRow
+	for rows.Next() {
+		var i ListInteractionEventsByTenantRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.DebtorID,
+			&i.Channel,
+			&i.Direction,
+			&i.Status,
+			&i.OccurredAt,
+			&i.TranscriptRef,
+			&i.DebtorTimezone,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

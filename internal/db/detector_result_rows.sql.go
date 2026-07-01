@@ -12,9 +12,9 @@ import (
 )
 
 const createDetectorResultRow = `-- name: CreateDetectorResultRow :one
-INSERT INTO detector_result_rows (tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, created_at
+INSERT INTO detector_result_rows (tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at
 `
 
 type CreateDetectorResultRowParams struct {
@@ -24,9 +24,22 @@ type CreateDetectorResultRowParams struct {
 	Outcome            string      `json:"outcome"`
 	Severity           string      `json:"severity"`
 	ResultPayload      []byte      `json:"result_payload"`
+	EvaluationID       pgtype.UUID `json:"evaluation_id"`
 }
 
-func (q *Queries) CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (DetectorResultRow, error) {
+type CreateDetectorResultRowRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	InteractionEventID pgtype.UUID        `json:"interaction_event_id"`
+	DetectorCode       string             `json:"detector_code"`
+	Outcome            string             `json:"outcome"`
+	Severity           string             `json:"severity"`
+	ResultPayload      []byte             `json:"result_payload"`
+	EvaluationID       pgtype.UUID        `json:"evaluation_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (CreateDetectorResultRowRow, error) {
 	row := q.db.QueryRow(ctx, createDetectorResultRow,
 		arg.TenantID,
 		arg.InteractionEventID,
@@ -34,8 +47,9 @@ func (q *Queries) CreateDetectorResultRow(ctx context.Context, arg CreateDetecto
 		arg.Outcome,
 		arg.Severity,
 		arg.ResultPayload,
+		arg.EvaluationID,
 	)
-	var i DetectorResultRow
+	var i CreateDetectorResultRowRow
 	err := row.Scan(
 		&i.ID,
 		&i.TenantID,
@@ -44,27 +58,40 @@ func (q *Queries) CreateDetectorResultRow(ctx context.Context, arg CreateDetecto
 		&i.Outcome,
 		&i.Severity,
 		&i.ResultPayload,
+		&i.EvaluationID,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listDetectorResultRowsByTenant = `-- name: ListDetectorResultRowsByTenant :many
-SELECT id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, created_at
+SELECT id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at
 FROM detector_result_rows
 WHERE tenant_id = $1
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]DetectorResultRow, error) {
+type ListDetectorResultRowsByTenantRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	InteractionEventID pgtype.UUID        `json:"interaction_event_id"`
+	DetectorCode       string             `json:"detector_code"`
+	Outcome            string             `json:"outcome"`
+	Severity           string             `json:"severity"`
+	ResultPayload      []byte             `json:"result_payload"`
+	EvaluationID       pgtype.UUID        `json:"evaluation_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDetectorResultRowsByTenantRow, error) {
 	rows, err := q.db.Query(ctx, listDetectorResultRowsByTenant, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []DetectorResultRow
+	var items []ListDetectorResultRowsByTenantRow
 	for rows.Next() {
-		var i DetectorResultRow
+		var i ListDetectorResultRowsByTenantRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.TenantID,
@@ -73,6 +100,7 @@ func (q *Queries) ListDetectorResultRowsByTenant(ctx context.Context, tenantID p
 			&i.Outcome,
 			&i.Severity,
 			&i.ResultPayload,
+			&i.EvaluationID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

@@ -17,10 +17,10 @@ import (
 type SeedQuerier interface {
 	GetTenantBySlug(ctx context.Context, slug string) (vigiaDB.Tenant, error)
 	CreateTenant(ctx context.Context, arg vigiaDB.CreateTenantParams) (vigiaDB.Tenant, error)
-	ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.Debtor, error)
-	CreateDebtor(ctx context.Context, arg vigiaDB.CreateDebtorParams) (vigiaDB.Debtor, error)
-	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.InteractionEvent, error)
-	CreateInteractionEvent(ctx context.Context, arg vigiaDB.CreateInteractionEventParams) (vigiaDB.InteractionEvent, error)
+	ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.ListDebtorsByTenantRow, error)
+	CreateDebtor(ctx context.Context, arg vigiaDB.CreateDebtorParams) (vigiaDB.CreateDebtorRow, error)
+	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.ListInteractionEventsByTenantRow, error)
+	CreateInteractionEvent(ctx context.Context, arg vigiaDB.CreateInteractionEventParams) (vigiaDB.CreateInteractionEventRow, error)
 }
 
 // KeyIssuer mints a tenant API key and returns the plaintext key once.
@@ -36,7 +36,13 @@ type DevDataParams struct {
 	DebtorRef  string // debtor external_ref (default: debtor-001)
 	DebtorName string // debtor display_name
 	Label      string // API key label (default: local-dev)
+	Timezone   string // debtor IANA timezone (default: America/Mexico_City)
 }
+
+// defaultDebtorTimezone is the demo debtor's IANA timezone when DevDataParams.Timezone
+// is left unset. It intentionally has no silent code-level fallback beyond this single,
+// explicit default (Decision 2 — no lingering timezone default at the DB layer).
+const defaultDebtorTimezone = "America/Mexico_City"
 
 // DevDataCounts records which entities were newly created vs. already present.
 type DevDataCounts struct {
@@ -123,27 +129,39 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, p DevDataP
 	if err != nil {
 		return DevDataResult{}, fmt.Errorf("list debtors: %w", err)
 	}
-	var debtor vigiaDB.Debtor
+	var debtorID pgtype.UUID
+	var debtorTimezone string
 	debtorFound := false
 	for _, d := range existingDebtors {
 		if d.ExternalRef == p.DebtorRef {
-			debtor = d
+			debtorID = d.ID
+			debtorTimezone = d.Timezone
 			debtorFound = true
 			break
 		}
 	}
 	if !debtorFound {
-		debtor, err = q.CreateDebtor(ctx, vigiaDB.CreateDebtorParams{
+		timezone := p.Timezone
+		if timezone == "" {
+			timezone = defaultDebtorTimezone
+		}
+		if _, err := time.LoadLocation(timezone); err != nil {
+			return DevDataResult{}, fmt.Errorf("invalid debtor timezone %q: %w", timezone, err)
+		}
+		created, err := q.CreateDebtor(ctx, vigiaDB.CreateDebtorParams{
 			TenantID:    tenant.ID,
 			ExternalRef: p.DebtorRef,
 			DisplayName: p.DebtorName,
+			Timezone:    timezone,
 		})
 		if err != nil {
 			return DevDataResult{}, fmt.Errorf("create debtor: %w", err)
 		}
+		debtorID = created.ID
+		debtorTimezone = created.Timezone
 		result.Created.DebtorCreated = true
 	}
-	result.DebtorID = uuidToString(debtor.ID)
+	result.DebtorID = uuidToString(debtorID)
 
 	// --- Interaction events (idempotent by transcript_ref) ---
 	existingEvents, err := q.ListInteractionEventsByTenant(ctx, tenant.ID)
@@ -167,7 +185,7 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, p DevDataP
 		ref := fix.transcriptRef
 		created, err := q.CreateInteractionEvent(ctx, vigiaDB.CreateInteractionEventParams{
 			TenantID:  tenant.ID,
-			DebtorID:  debtor.ID,
+			DebtorID:  debtorID,
 			Channel:   fix.channel,
 			Direction: fix.direction,
 			Status:    "recorded",
@@ -175,7 +193,8 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, p DevDataP
 				Time:  fix.occurredAt,
 				Valid: true,
 			},
-			TranscriptRef: &ref,
+			TranscriptRef:  &ref,
+			DebtorTimezone: debtorTimezone,
 		})
 		if err != nil {
 			return DevDataResult{}, fmt.Errorf("create interaction event %s: %w", fix.transcriptRef, err)

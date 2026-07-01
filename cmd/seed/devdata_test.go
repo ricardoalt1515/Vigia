@@ -21,16 +21,16 @@ type fakeSeedQuerier struct {
 
 	// canned responses
 	tenantBySlug map[string]vigiaDB.Tenant
-	debtorRows   []vigiaDB.Debtor
-	eventRows    []vigiaDB.InteractionEvent
+	debtorRows   []vigiaDB.ListDebtorsByTenantRow
+	eventRows    []vigiaDB.ListInteractionEventsByTenantRow
 
 	// errors
-	getTenantErr     error
-	createTenantErr  error
-	listDebtorsErr   error
-	createDebtorErr  error
-	listEventsErr    error
-	createEventErr   error
+	getTenantErr    error
+	createTenantErr error
+	listDebtorsErr  error
+	createDebtorErr error
+	listEventsErr   error
+	createEventErr  error
 }
 
 func (f *fakeSeedQuerier) GetTenantBySlug(ctx context.Context, slug string) (vigiaDB.Tenant, error) {
@@ -54,7 +54,7 @@ func (f *fakeSeedQuerier) CreateTenant(ctx context.Context, arg vigiaDB.CreateTe
 	return vigiaDB.Tenant{ID: id, Slug: arg.Slug, Name: arg.Name, Status: arg.Status}, nil
 }
 
-func (f *fakeSeedQuerier) ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.Debtor, error) {
+func (f *fakeSeedQuerier) ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.ListDebtorsByTenantRow, error) {
 	f.calls = append(f.calls, fakeCall{method: "ListDebtorsByTenant", arg: tenantID})
 	if f.listDebtorsErr != nil {
 		return nil, f.listDebtorsErr
@@ -62,16 +62,16 @@ func (f *fakeSeedQuerier) ListDebtorsByTenant(ctx context.Context, tenantID pgty
 	return f.debtorRows, nil
 }
 
-func (f *fakeSeedQuerier) CreateDebtor(ctx context.Context, arg vigiaDB.CreateDebtorParams) (vigiaDB.Debtor, error) {
+func (f *fakeSeedQuerier) CreateDebtor(ctx context.Context, arg vigiaDB.CreateDebtorParams) (vigiaDB.CreateDebtorRow, error) {
 	f.calls = append(f.calls, fakeCall{method: "CreateDebtor", arg: arg})
 	if f.createDebtorErr != nil {
-		return vigiaDB.Debtor{}, f.createDebtorErr
+		return vigiaDB.CreateDebtorRow{}, f.createDebtorErr
 	}
 	id := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
-	return vigiaDB.Debtor{ID: id, TenantID: arg.TenantID, ExternalRef: arg.ExternalRef, DisplayName: arg.DisplayName}, nil
+	return vigiaDB.CreateDebtorRow{ID: id, TenantID: arg.TenantID, ExternalRef: arg.ExternalRef, DisplayName: arg.DisplayName, Timezone: arg.Timezone}, nil
 }
 
-func (f *fakeSeedQuerier) ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.InteractionEvent, error) {
+func (f *fakeSeedQuerier) ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.ListInteractionEventsByTenantRow, error) {
 	f.calls = append(f.calls, fakeCall{method: "ListInteractionEventsByTenant", arg: tenantID})
 	if f.listEventsErr != nil {
 		return nil, f.listEventsErr
@@ -79,21 +79,22 @@ func (f *fakeSeedQuerier) ListInteractionEventsByTenant(ctx context.Context, ten
 	return f.eventRows, nil
 }
 
-func (f *fakeSeedQuerier) CreateInteractionEvent(ctx context.Context, arg vigiaDB.CreateInteractionEventParams) (vigiaDB.InteractionEvent, error) {
+func (f *fakeSeedQuerier) CreateInteractionEvent(ctx context.Context, arg vigiaDB.CreateInteractionEventParams) (vigiaDB.CreateInteractionEventRow, error) {
 	f.calls = append(f.calls, fakeCall{method: "CreateInteractionEvent", arg: arg})
 	if f.createEventErr != nil {
-		return vigiaDB.InteractionEvent{}, f.createEventErr
+		return vigiaDB.CreateInteractionEventRow{}, f.createEventErr
 	}
 	id := pgtype.UUID{Bytes: [16]byte{3}, Valid: true}
-	return vigiaDB.InteractionEvent{
-		ID:            id,
-		TenantID:      arg.TenantID,
-		DebtorID:      arg.DebtorID,
-		Channel:       arg.Channel,
-		Direction:     arg.Direction,
-		Status:        arg.Status,
-		OccurredAt:    arg.OccurredAt,
-		TranscriptRef: arg.TranscriptRef,
+	return vigiaDB.CreateInteractionEventRow{
+		ID:             id,
+		TenantID:       arg.TenantID,
+		DebtorID:       arg.DebtorID,
+		Channel:        arg.Channel,
+		Direction:      arg.Direction,
+		Status:         arg.Status,
+		OccurredAt:     arg.OccurredAt,
+		TranscriptRef:  arg.TranscriptRef,
+		DebtorTimezone: arg.DebtorTimezone,
 	}, nil
 }
 
@@ -118,9 +119,9 @@ func (f *fakeSeedQuerier) callOrder() []string {
 // --- fake KeyIssuer ---
 
 type fakeKeyIssuer struct {
-	calls       int
-	returnKey   string
-	returnErr   error
+	calls     int
+	returnKey string
+	returnErr error
 }
 
 func (k *fakeKeyIssuer) IssueTenantAPIKey(ctx context.Context, params IssueTenantAPIKeyParams) (IssuedTenantAPIKey, error) {
@@ -221,10 +222,10 @@ func TestSeedDevData(t *testing.T) {
 			tenantBySlug: map[string]vigiaDB.Tenant{
 				"demo": {ID: existingTenantID, Slug: "demo"},
 			},
-			debtorRows: []vigiaDB.Debtor{
-				{ID: existingDebtorID, TenantID: existingTenantID, ExternalRef: "debtor-001"},
+			debtorRows: []vigiaDB.ListDebtorsByTenantRow{
+				{ID: existingDebtorID, TenantID: existingTenantID, ExternalRef: "debtor-001", Timezone: "America/Mexico_City"},
 			},
-			eventRows: []vigiaDB.InteractionEvent{
+			eventRows: []vigiaDB.ListInteractionEventsByTenantRow{
 				{ID: pgtype.UUID{Bytes: [16]byte{31}, Valid: true}, TranscriptRef: &ref0},
 				{ID: pgtype.UUID{Bytes: [16]byte{32}, Valid: true}, TranscriptRef: &ref1},
 				{ID: pgtype.UUID{Bytes: [16]byte{33}, Valid: true}, TranscriptRef: &ref2},
@@ -273,10 +274,10 @@ func TestSeedDevData(t *testing.T) {
 			tenantBySlug: map[string]vigiaDB.Tenant{
 				"demo": {ID: existingTenantID, Slug: "demo"},
 			},
-			debtorRows: []vigiaDB.Debtor{
-				{ID: existingDebtorID, TenantID: existingTenantID, ExternalRef: "debtor-001"},
+			debtorRows: []vigiaDB.ListDebtorsByTenantRow{
+				{ID: existingDebtorID, TenantID: existingTenantID, ExternalRef: "debtor-001", Timezone: "America/Mexico_City"},
 			},
-			eventRows: []vigiaDB.InteractionEvent{
+			eventRows: []vigiaDB.ListInteractionEventsByTenantRow{
 				{ID: pgtype.UUID{Bytes: [16]byte{31}, Valid: true}, TranscriptRef: &ref0},
 			},
 		}

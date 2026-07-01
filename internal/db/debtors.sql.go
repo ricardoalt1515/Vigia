@@ -12,25 +12,42 @@ import (
 )
 
 const createDebtor = `-- name: CreateDebtor :one
-INSERT INTO debtors (tenant_id, external_ref, display_name)
-VALUES ($1, $2, $3)
-RETURNING id, tenant_id, external_ref, display_name, created_at, updated_at
+INSERT INTO debtors (tenant_id, external_ref, display_name, timezone)
+VALUES ($1, $2, $3, $4)
+RETURNING id, tenant_id, external_ref, display_name, timezone, created_at, updated_at
 `
 
 type CreateDebtorParams struct {
 	TenantID    pgtype.UUID `json:"tenant_id"`
 	ExternalRef string      `json:"external_ref"`
 	DisplayName string      `json:"display_name"`
+	Timezone    string      `json:"timezone"`
 }
 
-func (q *Queries) CreateDebtor(ctx context.Context, arg CreateDebtorParams) (Debtor, error) {
-	row := q.db.QueryRow(ctx, createDebtor, arg.TenantID, arg.ExternalRef, arg.DisplayName)
-	var i Debtor
+type CreateDebtorRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	ExternalRef string             `json:"external_ref"`
+	DisplayName string             `json:"display_name"`
+	Timezone    string             `json:"timezone"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) CreateDebtor(ctx context.Context, arg CreateDebtorParams) (CreateDebtorRow, error) {
+	row := q.db.QueryRow(ctx, createDebtor,
+		arg.TenantID,
+		arg.ExternalRef,
+		arg.DisplayName,
+		arg.Timezone,
+	)
+	var i CreateDebtorRow
 	err := row.Scan(
 		&i.ID,
 		&i.TenantID,
 		&i.ExternalRef,
 		&i.DisplayName,
+		&i.Timezone,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -38,7 +55,7 @@ func (q *Queries) CreateDebtor(ctx context.Context, arg CreateDebtorParams) (Deb
 }
 
 const getDebtorByTenant = `-- name: GetDebtorByTenant :one
-SELECT id, tenant_id, external_ref, display_name, created_at, updated_at
+SELECT id, tenant_id, external_ref, display_name, timezone, created_at, updated_at
 FROM debtors
 WHERE tenant_id = $1 AND id = $2
 `
@@ -48,14 +65,25 @@ type GetDebtorByTenantParams struct {
 	ID       pgtype.UUID `json:"id"`
 }
 
-func (q *Queries) GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantParams) (Debtor, error) {
+type GetDebtorByTenantRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	ExternalRef string             `json:"external_ref"`
+	DisplayName string             `json:"display_name"`
+	Timezone    string             `json:"timezone"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantParams) (GetDebtorByTenantRow, error) {
 	row := q.db.QueryRow(ctx, getDebtorByTenant, arg.TenantID, arg.ID)
-	var i Debtor
+	var i GetDebtorByTenantRow
 	err := row.Scan(
 		&i.ID,
 		&i.TenantID,
 		&i.ExternalRef,
 		&i.DisplayName,
+		&i.Timezone,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -63,26 +91,37 @@ func (q *Queries) GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantPa
 }
 
 const listDebtorsByTenant = `-- name: ListDebtorsByTenant :many
-SELECT id, tenant_id, external_ref, display_name, created_at, updated_at
+SELECT id, tenant_id, external_ref, display_name, timezone, created_at, updated_at
 FROM debtors
 WHERE tenant_id = $1
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]Debtor, error) {
+type ListDebtorsByTenantRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	ExternalRef string             `json:"external_ref"`
+	DisplayName string             `json:"display_name"`
+	Timezone    string             `json:"timezone"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDebtorsByTenantRow, error) {
 	rows, err := q.db.Query(ctx, listDebtorsByTenant, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Debtor
+	var items []ListDebtorsByTenantRow
 	for rows.Next() {
-		var i Debtor
+		var i ListDebtorsByTenantRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.TenantID,
 			&i.ExternalRef,
 			&i.DisplayName,
+			&i.Timezone,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
