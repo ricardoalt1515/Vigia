@@ -41,10 +41,10 @@ func WithUsageReporter(r UsageReporter) Option {
 // attempted in the failure paths.
 func NewFactory(ctx context.Context, opts Options, fnOpts ...Option) (caseflow.ProviderFactory, error) {
 	if opts.Region == "" {
-		return nil, fmt.Errorf("bedrock: %w: AWS_REGION is required", ErrMissingConfig)
+		return nil, fmt.Errorf("%w: AWS_REGION is required", ErrMissingConfig)
 	}
 	if opts.ModelID == "" {
-		return nil, fmt.Errorf("bedrock: %w: BEDROCK_MODEL_ID is required", ErrMissingConfig)
+		return nil, fmt.Errorf("%w: BEDROCK_MODEL_ID is required", ErrMissingConfig)
 	}
 
 	cfg := &factoryConfig{}
@@ -54,13 +54,13 @@ func NewFactory(ctx context.Context, opts Options, fnOpts ...Option) (caseflow.P
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(opts.Region))
 	if err != nil {
-		return nil, fmt.Errorf("bedrock: %w: failed to load AWS configuration: %v", ErrMissingConfig, err)
+		return nil, fmt.Errorf("%w: failed to load AWS configuration: %v", ErrMissingConfig, err)
 	}
 
 	// Eagerly resolve credentials so an unresolvable credential chain fails fast here, before any
 	// orchestrator or agent work starts, instead of surfacing on the first Generate call.
 	if _, err := awsCfg.Credentials.Retrieve(ctx); err != nil {
-		return nil, fmt.Errorf("bedrock: %w: failed to resolve AWS credentials: %v", ErrMissingConfig, err)
+		return nil, fmt.Errorf("%w: failed to resolve AWS credentials: %v", ErrMissingConfig, err)
 	}
 
 	client := bedrockruntime.NewFromConfig(awsCfg)

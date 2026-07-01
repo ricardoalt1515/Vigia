@@ -243,7 +243,7 @@ Sequential internally. Requires Slice 1 committed and green. Adds/modifies only
 
 ### RED: failing provider-selection tests
 
-- [ ] **[TEST FIRST]** Extend `cmd/harness-demo/provider_test.go` (`package main`). Must fail
+- [x] **[TEST FIRST]** Extend `cmd/harness-demo/provider_test.go` (`package main`). Must fail
   before the selection logic exists. Cover:
   - A provider-selection helper (e.g. `selectProviderFactory(provider string, ...) (caseflow.ProviderFactory,
     error)`) called with `"fake"` (or empty string) returns `demoProviderFactory` unchanged, no
@@ -257,7 +257,7 @@ Sequential internally. Requires Slice 1 committed and green. Adds/modifies only
 
 ### GREEN: provider-selection implementation
 
-- [ ] Modify `cmd/harness-demo/provider.go` (`package main`), additive only: add the
+- [x] Modify `cmd/harness-demo/provider.go` (`package main`), additive only: add the
   provider-selection helper switching between `demoProviderFactory` and a call to
   `bedrock.NewFactory(ctx, bedrock.Options{Region: ..., ModelID: ...}, ...)`, and optional usage
   accumulator wiring via `bedrock.WithUsageReporter` (e.g. feeding into the existing event sink or
@@ -265,13 +265,13 @@ Sequential internally. Requires Slice 1 committed and green. Adds/modifies only
 
 ### Verify provider selection
 
-- [ ] Run `go test ./cmd/harness-demo/...` — provider-selection tests green.
+- [x] Run `go test ./cmd/harness-demo/...` — provider-selection tests green.
 
 ---
 
 ### RED: failing CLI `--provider` flag / exit-code tests
 
-- [ ] **[TEST FIRST]** Extend `cmd/harness-demo/main_test.go` (`package main`). Must fail before
+- [x] **[TEST FIRST]** Extend `cmd/harness-demo/main_test.go` (`package main`). Must fail before
   `main.go`'s `--provider` flag exists. Cover:
   - `run([]string{"--provider", "bedrock"}, dir)` with `AWS_REGION`/`BEDROCK_MODEL_ID` unset (via
     `t.Setenv` clearing/omitting them) returns exit code `2`, prints a clear stderr message
@@ -301,7 +301,7 @@ Sequential internally. Requires Slice 1 committed and green. Adds/modifies only
 
 ### GREEN: CLI `--provider` flag implementation
 
-- [ ] Modify `cmd/harness-demo/main.go` (`package main`), additive only: add a `--provider`
+- [x] Modify `cmd/harness-demo/main.go` (`package main`), additive only: add a `--provider`
   string flag (default `"fake"`); validate its value is `"fake"` or `"bedrock"`, else print a
   usage error and return exit `2` before any other work. When `"bedrock"`, read `AWS_REGION` and
   `BEDROCK_MODEL_ID` via `os.LookupEnv` (intentionally bypassing `internal/config.Load` — see Apply
@@ -313,13 +313,13 @@ Sequential internally. Requires Slice 1 committed and green. Adds/modifies only
 
 ### Verify CLI flag
 
-- [ ] Run `go test ./cmd/harness-demo/...` — all `--provider` flag/exit-code tests green.
+- [x] Run `go test ./cmd/harness-demo/...` — all `--provider` flag/exit-code tests green.
 
 ---
 
 ### `.env.example` guidance
 
-- [ ] Modify `.env.example`: fill Bedrock opt-in guidance into the existing `AWS_REGION` /
+- [x] Modify `.env.example`: fill Bedrock opt-in guidance into the existing `AWS_REGION` /
   `BEDROCK_MODEL_ID` scaffold (short comment noting these are optional, required only for
   `--provider bedrock`, and that Bedrock is opt-in / not used in default tests or demos per
   project conventions).
@@ -328,24 +328,26 @@ Sequential internally. Requires Slice 1 committed and green. Adds/modifies only
 
 ### Import-boundary audit
 
-- [ ] Run `go list -deps ./internal/harness/caseflow/...` and confirm zero matches for
+- [x] Run `go list -deps ./internal/harness/caseflow/...` and confirm zero matches for
   `github.com/aws/aws-sdk-go-v2`. Repeat for Domain Agent packages and the #18/#19/#20 packages
   (`internal/harness`, `internal/harness/labtools`) if not already covered by Slice 1's audit.
   Record the confirming command output in the Slice 2 PR description.
   Satisfies: `harness-bedrock-provider/spec.md` § "Core Harness packages have zero AWS SDK
   imports" (final confirmation after CLI wiring lands).
+  Confirmed: `go list -deps ./internal/harness/caseflow/... ./internal/harness/labtools/... ./internal/harness/`
+  produces zero matches for `aws-sdk-go-v2`.
 
 ## Slice 2 Final Verification
 
-- [ ] Run `go test ./...` from repo root — full suite green, including every Slice 1 and
+- [x] Run `go test ./...` from repo root — full suite green, including every Slice 1 and
   pre-existing #18/#19/#20/#21 test unmodified.
-- [ ] Run `go vet ./...` — no errors.
-- [ ] Confirm no network calls, live AWS credentials, or live Bedrock access occur during
+- [x] Run `go vet ./...` — no errors.
+- [x] Confirm no network calls, live AWS credentials, or live Bedrock access occur during
   `go test ./...`.
-- [ ] Confirm modified/created files are limited to `cmd/harness-demo/{main.go,provider.go}` (both
+- [x] Confirm modified/created files are limited to `cmd/harness-demo/{main.go,provider.go}` (both
   additive-only changes) plus their `_test.go` files, and `.env.example`. No file under
   `internal/harness/` is touched in this slice.
-- [ ] **STOP: commit Slice 2 as one work-unit commit**, using a conventional commit message (no AI
+- [x] **STOP: commit Slice 2 as one work-unit commit**, using a conventional commit message (no AI
   attribution trailer). PR description must explicitly state: (a) the new production AWS SDK
   dependency landed in Slice 1, (b) tests in `internal/harness/bedrock` import `bedrockruntime` for
   type construction only, never network/client use, (c) `main.go` intentionally reads

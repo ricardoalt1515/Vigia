@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/ricardoalt1515/vigia/internal/harness"
+	"github.com/ricardoalt1515/vigia/internal/harness/bedrock"
 	"github.com/ricardoalt1515/vigia/internal/harness/caseflow"
 )
 
@@ -97,4 +100,81 @@ func TestDemoProviderFactory_UnknownAgent_Panics(t *testing.T) {
 		}
 	}()
 	demoProviderFactory("UnknownAgent")
+}
+
+// --- selectProviderFactory (Slice 2 / #22) ------------------------------------------------------
+
+func TestSelectProviderFactory_FakeOrEmpty_ReturnsDemoProviderFactoryUnchanged(t *testing.T) {
+	for _, provider := range []string{"", "fake"} {
+		t.Run(provider, func(t *testing.T) {
+			factory, err := selectProviderFactory(context.Background(), provider)
+			if err != nil {
+				t.Fatalf("selectProviderFactory(%q) error = %v, want nil", provider, err)
+			}
+			gotPtr := reflect.ValueOf(factory).Pointer()
+			wantPtr := reflect.ValueOf(caseflow.ProviderFactory(demoProviderFactory)).Pointer()
+			if gotPtr != wantPtr {
+				t.Errorf("selectProviderFactory(%q) did not return demoProviderFactory unchanged", provider)
+			}
+		})
+	}
+}
+
+func TestSelectProviderFactory_Bedrock_DelegatesToBedrockNewFactory(t *testing.T) {
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("BEDROCK_MODEL_ID", "anthropic.claude-3-sonnet")
+
+	restore := newBedrockFactory
+	defer func() { newBedrockFactory = restore }()
+
+	called := false
+	var gotOpts bedrock.Options
+	newBedrockFactory = func(_ context.Context, opts bedrock.Options, _ ...bedrock.Option) (caseflow.ProviderFactory, error) {
+		called = true
+		gotOpts = opts
+		return demoProviderFactory, nil
+	}
+
+	factory, err := selectProviderFactory(context.Background(), "bedrock")
+	if err != nil {
+		t.Fatalf("selectProviderFactory(bedrock) error = %v, want nil", err)
+	}
+	if !called {
+		t.Fatal("expected newBedrockFactory to be invoked, was not")
+	}
+	if gotOpts.Region != "us-east-1" || gotOpts.ModelID != "anthropic.claude-3-sonnet" {
+		t.Errorf("gotOpts = %+v, want Region=us-east-1 ModelID=anthropic.claude-3-sonnet", gotOpts)
+	}
+	if factory == nil {
+		t.Fatal("factory is nil, want the fake factory returned by newBedrockFactory")
+	}
+}
+
+func TestSelectProviderFactory_Bedrock_MissingEnv_ReturnsErrMissingConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		region  string
+		modelID string
+	}{
+		{name: "missing AWS_REGION", region: "", modelID: "anthropic.claude-3-sonnet"},
+		{name: "missing BEDROCK_MODEL_ID", region: "us-east-1", modelID: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AWS_REGION", tc.region)
+			t.Setenv("BEDROCK_MODEL_ID", tc.modelID)
+
+			_, err := selectProviderFactory(context.Background(), "bedrock")
+			if !errors.Is(err, bedrock.ErrMissingConfig) {
+				t.Fatalf("err = %v, want errors.Is match for bedrock.ErrMissingConfig", err)
+			}
+		})
+	}
+}
+
+func TestSelectProviderFactory_UnknownValue_ReturnsUsageError(t *testing.T) {
+	_, err := selectProviderFactory(context.Background(), "something-else")
+	if err == nil {
+		t.Fatal("expected an error for an unknown --provider value")
+	}
 }
