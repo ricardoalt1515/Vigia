@@ -6,7 +6,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/ricardoalt1515/vigia/internal/core"
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
+	"github.com/ricardoalt1515/vigia/internal/evaluation"
 )
 
 // --- fake SeedQuerier ---
@@ -136,6 +138,31 @@ func (k *fakeKeyIssuer) IssueTenantAPIKey(ctx context.Context, params IssueTenan
 	return IssuedTenantAPIKey{PlaintextKey: key}, nil
 }
 
+// --- fake Evaluator ---
+
+type fakeEvaluatorCall struct {
+	tenantID           string
+	interactionEventID string
+	debtorTimezone     string
+}
+
+type fakeEvaluator struct {
+	calls []fakeEvaluatorCall
+	err   error
+}
+
+func (f *fakeEvaluator) EvaluateInteraction(ctx context.Context, in evaluation.EvaluateInteractionInput) (core.Evaluation, error) {
+	f.calls = append(f.calls, fakeEvaluatorCall{
+		tenantID:           in.TenantID,
+		interactionEventID: in.InteractionEventID,
+		debtorTimezone:     in.Interaction.DebtorTimezone,
+	})
+	if f.err != nil {
+		return core.Evaluation{}, f.err
+	}
+	return core.Evaluation{ID: "evaluation-fake", OverallOutcome: "fail"}, nil
+}
+
 // defaultParams returns a DevDataParams with standard dev fixture values.
 func defaultParams() DevDataParams {
 	return DevDataParams{
@@ -159,7 +186,8 @@ func TestSeedDevData(t *testing.T) {
 		}
 		issuer := &fakeKeyIssuer{}
 
-		result, err := SeedDevData(ctx, q, issuer, defaultParams())
+		evaluator := &fakeEvaluator{}
+		result, err := SeedDevData(ctx, q, issuer, evaluator, defaultParams())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -172,9 +200,10 @@ func TestSeedDevData(t *testing.T) {
 		if got := q.countMethodCalls("CreateDebtor"); got != 1 {
 			t.Errorf("CreateDebtor calls = %d, want 1", got)
 		}
-		// Exactly three CreateInteractionEvent calls
-		if got := q.countMethodCalls("CreateInteractionEvent"); got != 3 {
-			t.Errorf("CreateInteractionEvent calls = %d, want 3", got)
+		// Exactly four CreateInteractionEvent calls (three original fixtures
+		// plus the out-of-hours demo fixture, WU7)
+		if got := q.countMethodCalls("CreateInteractionEvent"); got != 4 {
+			t.Errorf("CreateInteractionEvent calls = %d, want 4", got)
 		}
 		// Exactly one key issuance
 		if issuer.calls != 1 {
@@ -193,8 +222,8 @@ func TestSeedDevData(t *testing.T) {
 		if result.DebtorID == "" {
 			t.Error("DebtorID should be set in result")
 		}
-		if len(result.InteractionIDs) != 3 {
-			t.Errorf("InteractionIDs = %d, want 3", len(result.InteractionIDs))
+		if len(result.InteractionIDs) != 4 {
+			t.Errorf("InteractionIDs = %d, want 4", len(result.InteractionIDs))
 		}
 		if result.PlaintextKey == "" {
 			t.Error("PlaintextKey should be set in result")
@@ -206,8 +235,21 @@ func TestSeedDevData(t *testing.T) {
 		if !result.Created.DebtorCreated {
 			t.Error("Created.DebtorCreated should be true")
 		}
-		if result.Created.InteractionsCreated != 3 {
-			t.Errorf("Created.InteractionsCreated = %d, want 3", result.Created.InteractionsCreated)
+		if result.Created.InteractionsCreated != 4 {
+			t.Errorf("Created.InteractionsCreated = %d, want 4", result.Created.InteractionsCreated)
+		}
+		// Every newly created interaction is evaluated exactly once, with the
+		// debtor's snapshotted timezone (never empty/UTC-defaulted).
+		if len(evaluator.calls) != 4 {
+			t.Fatalf("Evaluator calls = %d, want 4", len(evaluator.calls))
+		}
+		for _, c := range evaluator.calls {
+			if c.tenantID != result.TenantID {
+				t.Errorf("evaluator call tenantID = %q, want %q", c.tenantID, result.TenantID)
+			}
+			if c.debtorTimezone == "" {
+				t.Error("evaluator call debtorTimezone should not be empty")
+			}
 		}
 	})
 
@@ -217,6 +259,7 @@ func TestSeedDevData(t *testing.T) {
 		ref0 := "seed/demo/call-01"
 		ref1 := "seed/demo/message-01"
 		ref2 := "seed/demo/email-01"
+		ref3 := "seed/demo/call-02-after-hours"
 
 		q := &fakeSeedQuerier{
 			tenantBySlug: map[string]vigiaDB.Tenant{
@@ -229,11 +272,13 @@ func TestSeedDevData(t *testing.T) {
 				{ID: pgtype.UUID{Bytes: [16]byte{31}, Valid: true}, TranscriptRef: &ref0},
 				{ID: pgtype.UUID{Bytes: [16]byte{32}, Valid: true}, TranscriptRef: &ref1},
 				{ID: pgtype.UUID{Bytes: [16]byte{33}, Valid: true}, TranscriptRef: &ref2},
+				{ID: pgtype.UUID{Bytes: [16]byte{34}, Valid: true}, TranscriptRef: &ref3},
 			},
 		}
 		issuer := &fakeKeyIssuer{}
 
-		result, err := SeedDevData(ctx, q, issuer, defaultParams())
+		evaluator := &fakeEvaluator{}
+		result, err := SeedDevData(ctx, q, issuer, evaluator, defaultParams())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -252,6 +297,10 @@ func TestSeedDevData(t *testing.T) {
 		if issuer.calls != 1 {
 			t.Errorf("KeyIssuer calls = %d, want 1", issuer.calls)
 		}
+		// No re-evaluation of already-seeded interactions
+		if len(evaluator.calls) != 0 {
+			t.Errorf("Evaluator calls = %d, want 0 (idempotent — no re-evaluation)", len(evaluator.calls))
+		}
 
 		if result.Created.TenantCreated {
 			t.Error("Created.TenantCreated should be false on re-run")
@@ -267,7 +316,7 @@ func TestSeedDevData(t *testing.T) {
 	t.Run("partial_state_missing_interactions", func(t *testing.T) {
 		existingTenantID := pgtype.UUID{Bytes: [16]byte{10}, Valid: true}
 		existingDebtorID := pgtype.UUID{Bytes: [16]byte{20}, Valid: true}
-		// Only the first interaction exists; two are missing.
+		// Only the first interaction exists; three are missing.
 		ref0 := "seed/demo/call-01"
 
 		q := &fakeSeedQuerier{
@@ -283,7 +332,8 @@ func TestSeedDevData(t *testing.T) {
 		}
 		issuer := &fakeKeyIssuer{}
 
-		result, err := SeedDevData(ctx, q, issuer, defaultParams())
+		evaluator := &fakeEvaluator{}
+		result, err := SeedDevData(ctx, q, issuer, evaluator, defaultParams())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -294,15 +344,18 @@ func TestSeedDevData(t *testing.T) {
 		if got := q.countMethodCalls("CreateDebtor"); got != 0 {
 			t.Errorf("CreateDebtor calls = %d, want 0", got)
 		}
-		// Only the two missing interactions should be created
-		if got := q.countMethodCalls("CreateInteractionEvent"); got != 2 {
-			t.Errorf("CreateInteractionEvent calls = %d, want 2 (missing ones only)", got)
+		// Only the three missing interactions should be created
+		if got := q.countMethodCalls("CreateInteractionEvent"); got != 3 {
+			t.Errorf("CreateInteractionEvent calls = %d, want 3 (missing ones only)", got)
 		}
 		if issuer.calls != 1 {
 			t.Errorf("KeyIssuer calls = %d, want 1", issuer.calls)
 		}
-		if result.Created.InteractionsCreated != 2 {
-			t.Errorf("Created.InteractionsCreated = %d, want 2", result.Created.InteractionsCreated)
+		if result.Created.InteractionsCreated != 3 {
+			t.Errorf("Created.InteractionsCreated = %d, want 3", result.Created.InteractionsCreated)
+		}
+		if len(evaluator.calls) != 3 {
+			t.Errorf("Evaluator calls = %d, want 3 (only newly created interactions)", len(evaluator.calls))
 		}
 
 		// Verify the created interactions have the correct transcript_refs
@@ -315,7 +368,7 @@ func TestSeedDevData(t *testing.T) {
 				}
 			}
 		}
-		wantRefs := []string{"seed/demo/message-01", "seed/demo/email-01"}
+		wantRefs := []string{"seed/demo/message-01", "seed/demo/email-01", "seed/demo/call-02-after-hours"}
 		for _, want := range wantRefs {
 			found := false
 			for _, got := range createdRefs {
