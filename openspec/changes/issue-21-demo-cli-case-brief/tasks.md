@@ -180,7 +180,7 @@ package.
 
 ### RED: failing Fake provider tests
 
-- [ ] **[TEST FIRST]** Create `cmd/harness-demo/provider_test.go` (`package main`). Must fail
+- [x] **[TEST FIRST]** Create `cmd/harness-demo/provider_test.go` (`package main`). Must fail
   before `provider.go` exists. Cover:
   - `demoProviderFactory("PolicyExplainer")`, `("CaseInvestigator")`, `("EvidencePackager")`,
     `("SupervisorNoteDrafter")` each return a non-nil `harness.ModelProvider` whose scripted
@@ -192,7 +192,7 @@ package.
 
 ### GREEN: Fake provider implementation
 
-- [ ] Create `cmd/harness-demo/provider.go` (`package main`). Contents:
+- [x] Create `cmd/harness-demo/provider.go` (`package main`). Contents:
   - `type scriptedProvider struct { outputs []harness.ModelOutput; calls int }` implementing
     `harness.ModelProvider.Generate`, mirroring the #20 e2e `caseflowQueuedProvider` pattern but
     living in `package main`.
@@ -204,13 +204,13 @@ package.
 
 ### Verify provider
 
-- [ ] Run `go test ./cmd/harness-demo/...` — provider tests green.
+- [x] Run `go test ./cmd/harness-demo/...` — provider tests green.
 
 ---
 
 ### RED: failing Spanish renderer tests
 
-- [ ] **[TEST FIRST]** Create `cmd/harness-demo/render_test.go` (`package main`). Must fail before
+- [x] **[TEST FIRST]** Create `cmd/harness-demo/render_test.go` (`package main`). Must fail before
   `render.go` exists. Cover, table-driven:
   - `renderBriefMarkdown(briefDTO)` (or equivalent name matching the design's renderer entry
     point) on a complete `briefDTO` produces a document whose body is neutral professional
@@ -239,7 +239,7 @@ package.
 
 ### GREEN: Spanish renderer implementation
 
-- [ ] Create `cmd/harness-demo/render.go` (`package main`). Contents per design: opening
+- [x] Create `cmd/harness-demo/render.go` (`package main`). Contents per design: opening
   DISCLAIMER block (`BORRADOR — requiere revisión del Supervisor de Cumplimiento`); `Resumen del
   caso` section (`case_id`, `estado` labeled in Spanish); one section per stage keyed by handoff
   kind (`Política aplicable`, `Investigación`, `Manifiesto de evidencia (borrador)`, `Nota para el
@@ -250,13 +250,13 @@ package.
 
 ### Verify renderer
 
-- [ ] Run `go test ./cmd/harness-demo/...` — renderer tests green.
+- [x] Run `go test ./cmd/harness-demo/...` — renderer tests green.
 
 ---
 
 ### RED: failing event log (JSONL) tests
 
-- [ ] **[TEST FIRST]** Create `cmd/harness-demo/eventlog_test.go` (`package main`). Must fail
+- [x] **[TEST FIRST]** Create `cmd/harness-demo/eventlog_test.go` (`package main`). Must fail
   before `eventlog.go` exists. Cover:
   - An `eventSink` (or equivalent name) accumulates `(agentName string, seq int, event
     harness.Event)` entries when used as the `caseflow.EventObserver` passed to
@@ -274,39 +274,39 @@ package.
 
 ### GREEN: event log implementation
 
-- [ ] Create `cmd/harness-demo/eventlog.go` (`package main`). Contents: a sink type implementing
+- [x] Create `cmd/harness-demo/eventlog.go` (`package main`). Contents: a sink type implementing
   `caseflow.EventObserver`'s call shape, an internal monotonic sequence counter, and a
   `jsonl() ([]byte, error)` method serializing one `harness.Event` (plus `agent_name` and
   `sequence`) per line via `encoding/json`, newline-joined.
 
 ### Verify event log
 
-- [ ] Run `go test ./cmd/harness-demo/...` — event log tests green.
+- [x] Run `go test ./cmd/harness-demo/...` — event log tests green.
 
 ---
 
 ### RED: failing portfolio case file test
 
-- [ ] **[TEST FIRST]** Add a case to `cmd/harness-demo/main_test.go` (created below, or a small
+- [x] **[TEST FIRST]** Add a case to `cmd/harness-demo/main_test.go` (created below, or a small
   standalone test if `main_test.go` is not yet created) asserting
   `data/synthetic/cases/CASE-SYN-001.json` exists, is valid JSON, and its `case_id` field equals
   `"CASE-SYN-001"`, matching the embedded fixture read via `labtools.Load()`.
 
 ### GREEN: portfolio case file
 
-- [ ] Create `data/synthetic/cases/CASE-SYN-001.json` as a verbatim mirror of the embedded
+- [x] Create `data/synthetic/cases/CASE-SYN-001.json` as a verbatim mirror of the embedded
   synthetic Case fixture used by `labtools.Load()` for `CASE-SYN-001` (copy the fixture content;
   do not hand-author a divergent shape).
 
 ### Verify portfolio case
 
-- [ ] Run `go test ./cmd/harness-demo/...` — portfolio case file test green.
+- [x] Run `go test ./cmd/harness-demo/...` — portfolio case file test green.
 
 ---
 
 ### RED: failing CLI wiring / exit-code / atomicity e2e tests
 
-- [ ] **[TEST FIRST]** Create `cmd/harness-demo/main_test.go` (`package main`). Refactor `main`'s
+- [x] **[TEST FIRST]** Create `cmd/harness-demo/main_test.go` (`package main`). Refactor `main`'s
   logic behind an in-process entry point, e.g. `func run(args []string, outDir string) int`, so
   tests can invoke it without `os.Exit`. All tests below must fail before `main.go` exists. Cover:
   - **Default run**: `run(nil, t.TempDir())` (or equivalent default-flag invocation) against
@@ -354,7 +354,7 @@ package.
 
 ### GREEN: CLI wiring implementation
 
-- [ ] Create `cmd/harness-demo/main.go` (`package main`). Contents per design:
+- [x] Create `cmd/harness-demo/main.go` (`package main`). Contents per design:
   - Flag parsing: `--case` (string, default `data/synthetic/cases/CASE-SYN-001.json`).
   - Read the `--case` file only to extract `case_id`; on unreadable/invalid JSON, return exit
     code `2` before constructing anything.
@@ -379,12 +379,12 @@ package.
 
 ### Verify CLI wiring
 
-- [ ] Run `go test ./cmd/harness-demo/...` — all e2e CLI tests green, including the
+- [x] Run `go test ./cmd/harness-demo/...` — all e2e CLI tests green, including the
   zero-partial-files and determinism cases.
-- [ ] Run `go test ./...` from repo root — every package green, including all Slice 1 and #20
+- [x] Run `go test ./...` from repo root — every package green, including all Slice 1 and #20
   tests unmodified.
-- [ ] Run `go vet ./...` — no errors.
-- [ ] Manually confirm (or assert via test) `go run ./cmd/harness-demo` with no flags exits `0`
+- [x] Run `go vet ./...` — no errors.
+- [x] Manually confirm (or assert via test) `go run ./cmd/harness-demo` with no flags exits `0`
   and produces the three files under `data/synthetic/harness-runs/` with no AWS/network/DB
   dependency.
 
@@ -392,14 +392,14 @@ package.
 
 ## Slice 2 Final Verification
 
-- [ ] Run `go test ./...` from repo root — full suite green.
-- [ ] Confirm scope: modified/created files are limited to `cmd/harness-demo/*` (new files only —
+- [x] Run `go test ./...` from repo root — full suite green.
+- [x] Confirm scope: modified/created files are limited to `cmd/harness-demo/*` (new files only —
   `main.go`, `provider.go`, `render.go`, `eventlog.go`, plus their `_test.go` files) and
   `data/synthetic/cases/CASE-SYN-001.json`. No file under `internal/harness/` is touched in this
   slice (the seam already landed in Slice 1).
-- [ ] Confirm no network calls, database connections, or Bedrock access occur during
+- [x] Confirm no network calls, database connections, or Bedrock access occur during
   `go test ./cmd/harness-demo/...`.
-- [ ] Confirm `.gitignore` or run instructions make clear that `data/synthetic/harness-runs/*` is
+- [x] Confirm `.gitignore` or run instructions make clear that `data/synthetic/harness-runs/*` is
   disposable generated output, not committed alongside source (verify existing project convention
   before adding a new ignore rule; do not add one if not needed for the actual test/run behavior).
 

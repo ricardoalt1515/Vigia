@@ -1,0 +1,46 @@
+{
+  "case_id": "CASE-SYN-001",
+  "tenant_id": "SYN-TENANT-001",
+  "debtor": {
+    "label": "Debtor-Synthetic-001"
+  },
+  "collector": {
+    "despacho_id": "DESPACHO-SYN-01",
+    "label": "Collector-Synthetic-001"
+  },
+  "transcript": [
+    {
+      "speaker": "collector",
+      "text": "Good evening, this is a courtesy call regarding your outstanding balance."
+    },
+    {
+      "speaker": "debtor",
+      "text": "It is very late. Please call back during business hours."
+    },
+    {
+      "speaker": "collector",
+      "text": "Pay now or you will face serious consequences."
+    }
+  ],
+  "channel": "voice",
+  "occurred_at": "2024-03-15T23:30:00-06:00",
+  "debtor_timezone": "America/Mexico_City",
+  "detector_results": [
+    {
+      "rule_code": "MX-REDECO-04",
+      "detector_kind": "deterministic",
+      "outcome": "hard_block"
+    },
+    {
+      "rule_code": "MX-REDECO-05",
+      "detector_kind": "llm_judge",
+      "outcome": "hard_block",
+      "hitl_required": true
+    }
+  ],
+  "applicable_rule_ids": ["MX-REDECO-04", "MX-REDECO-05"],
+  "evidence_metadata": {
+    "status": "pending",
+    "record_id": null
+  }
+}
