@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ricardoalt1515/vigia/cmd/harness-demo/schema/case_brief.schema.json",
+  "title": "Case Brief",
+  "description": "Flattened, forward-only output contract for a caseflow.CaseBrief run.",
+  "type": "object",
+  "required": ["case_id", "status", "stages"],
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["complete", "incomplete"]
+    },
+    "stages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stage" }
+    },
+    "failed_agent": {
+      "type": "string"
+    },
+    "failure_reason": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "stage": {
+      "type": "object",
+      "required": ["agent_name", "kind", "handoff"],
+      "additionalProperties": false,
+      "properties": {
+        "agent_name": { "type": "string", "minLength": 1 },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "policy_explanation",
+            "case_investigation",
+            "evidence_manifest_draft",
+            "supervisor_note_draft"
+          ]
+        },
+        "handoff": { "type": "object" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "policy_explanation" } }
+          },
+          "then": {
+            "properties": { "handoff": { "$ref": "#/$defs/policyExplanation" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "case_investigation" } }
+          },
+          "then": {
+            "properties": { "handoff": { "$ref": "#/$defs/caseInvestigation" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "evidence_manifest_draft" } }
+          },
+          "then": {
+            "properties": { "handoff": { "$ref": "#/$defs/evidenceManifestDraft" } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "supervisor_note_draft" } }
+          },
+          "then": {
+            "properties": { "handoff": { "$ref": "#/$defs/supervisorNoteDraft" } }
+          }
+        }
+      ]
+    },
+    "policyExplanation": {
+      "type": "object",
+      "required": ["case_id", "rules"],
+      "additionalProperties": false,
+      "properties": {
+        "case_id": { "type": "string" },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["code", "title", "severity", "plain_language"],
+            "additionalProperties": false,
+            "properties": {
+              "code": { "type": "string" },
+              "title": { "type": "string" },
+              "severity": { "type": "string" },
+              "plain_language": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "caseInvestigation": {
+      "type": "object",
+      "required": ["case_id", "findings"],
+      "additionalProperties": false,
+      "properties": {
+        "case_id": { "type": "string" },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rule_code", "evidence", "analysis"],
+            "additionalProperties": false,
+            "properties": {
+              "rule_code": { "type": "string" },
+              "evidence": { "type": "string" },
+              "analysis": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "evidenceManifestDraft": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "rule_codes",
+        "findings",
+        "proposed_at",
+        "authoritative",
+        "persisted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "case_id": { "type": "string" },
+        "rule_codes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "findings": { "type": "string" },
+        "proposed_at": { "type": "string" },
+        "authoritative": { "type": "boolean" },
+        "persisted": { "type": "boolean" }
+      }
+    },
+    "supervisorNoteDraft": {
+      "type": "object",
+      "required": [
+        "case_id",
+        "rule_codes",
+        "note_body",
+        "proposed_at",
+        "authoritative",
+        "persisted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "case_id": { "type": "string" },
+        "rule_codes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "note_body": { "type": "string" },
+        "proposed_at": { "type": "string" },
+        "authoritative": { "type": "boolean" },
+        "persisted": { "type": "boolean" }
+      }
+    }
+  }
+}

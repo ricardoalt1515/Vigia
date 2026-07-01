@@ -112,10 +112,26 @@ func extractFeedback(events []harness.Event) string {
 	return ""
 }
 
+// EventObserver receives the per-agent harness.Event slice produced by one completed RunStep call.
+// It is invoked immediately after each successful RunStep return, including retries and the terminal
+// failure step. A nil observer preserves the current discard behavior.
+type EventObserver func(agentName string, events []harness.Event)
+
+// OrchestratorOption configures an Orchestrator at construction time.
+type OrchestratorOption func(*Orchestrator)
+
+// WithEventObserver registers obs so it is invoked with (agentName, events) once per completed
+// RunStep call inside runAgent.
+func WithEventObserver(obs EventObserver) OrchestratorOption {
+	return func(o *Orchestrator) { o.observer = obs }
+}
+
 // runAgent drives one agent through its bounded RunStep loop.
 // It returns (handoff, "", nil) on success, or ("", reason, ErrAgentFailed) on failure.
 // observations and events are loop-local and never passed to other agents (Lock 7).
-func runAgent(ctx context.Context, def AgentDefinition, rt harness.Runtime, caseID string, priorHandoffs []HandoffArtifact) (HandoffArtifact, string, error) {
+// observer, if non-nil, is invoked with (def.Name, result.Events) after every RunStep call that
+// returns without a transport error.
+func runAgent(ctx context.Context, def AgentDefinition, rt harness.Runtime, caseID string, priorHandoffs []HandoffArtifact, observer EventObserver) (HandoffArtifact, string, error) {
 	var observations []string
 	var feedback string
 	retried := false
@@ -125,6 +141,9 @@ func runAgent(ctx context.Context, def AgentDefinition, rt harness.Runtime, case
 		result, err := rt.RunStep(ctx, harness.StepInput{Input: input})
 		if err != nil {
 			return nil, err.Error(), ErrAgentFailed
+		}
+		if observer != nil {
+			observer(def.Name, result.Events)
 		}
 
 		switch result.Status {
@@ -189,19 +208,26 @@ type Orchestrator struct {
 	fullRegistry harness.ToolRegistry
 	gate         harness.PermissionGate
 	defs         []AgentDefinition
+	observer     EventObserver
 }
 
 // NewOrchestrator constructs an Orchestrator, enforcing the MaxModelAttempts==1 guard on all defs.
-func NewOrchestrator(factory ProviderFactory, registry harness.ToolRegistry, gate harness.PermissionGate, defs []AgentDefinition) (*Orchestrator, error) {
+// opts is applied after validation succeeds; the first four parameters are unchanged from the #20
+// signature so existing call sites compile without modification.
+func NewOrchestrator(factory ProviderFactory, registry harness.ToolRegistry, gate harness.PermissionGate, defs []AgentDefinition, opts ...OrchestratorOption) (*Orchestrator, error) {
 	if err := validateAgentDefinitions(defs); err != nil {
 		return nil, err
 	}
-	return &Orchestrator{
+	o := &Orchestrator{
 		factory:      factory,
 		fullRegistry: registry,
 		gate:         gate,
 		defs:         defs,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(o)
+	}
+	return o, nil
 }
 
 // Run executes all agent definitions in their fixed declared order.
@@ -220,7 +246,7 @@ func (o *Orchestrator) Run(ctx context.Context, caseID string) (CaseBrief, error
 			Budget:      def.Budget,
 		}
 
-		handoff, reason, err := runAgent(ctx, def, rt, caseID, priorHandoffs)
+		handoff, reason, err := runAgent(ctx, def, rt, caseID, priorHandoffs, o.observer)
 		if err != nil {
 			brief.Status = CaseStatusIncomplete
 			brief.FailedAgent = def.Name

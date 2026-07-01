@@ -18,5 +18,6 @@ dist/
 .DS_Store
 coverage/
 /data/synthetic/*.audio
+/data/synthetic/harness-runs/
 # Local Pi runtime state
 .atl/
