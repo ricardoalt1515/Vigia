@@ -483,6 +483,88 @@ func tamperEvidenceRecordBypassingTrigger(t *testing.T, ctx context.Context, poo
 	}
 }
 
+// TestEvidenceRLSIsolationAcrossTenants covers RLS-enforced tenant isolation
+// for evidence_records / ledger_chain_heads (design.md's "Integration — RLS
+// isolation" testing-strategy row), following the restricted-role
+// APP_DATABASE_URL pattern established in internal/db/rls_isolation_test.go
+// and internal/postgres/evaluation_integration_test.go. Skips (with a
+// documented reason) when APP_DATABASE_URL is not configured, since no
+// restricted role is provisioned by default in this dev environment.
+func TestEvidenceRLSIsolationAcrossTenants(t *testing.T) {
+	databaseURL := requireDatabaseURL(t)
+	appDatabaseURL := os.Getenv("APP_DATABASE_URL")
+	if appDatabaseURL == "" {
+		t.Skip("APP_DATABASE_URL (a role without BypassRLS) is required for the evidence RLS isolation test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+
+	tenantA, debtorA := seedTenantAndDebtor(t, ctx, pool, "evid-rls-a")
+	tenantB, debtorB := seedTenantAndDebtor(t, ctx, pool, "evid-rls-b")
+	interactionA := seedInteraction(t, ctx, pool, tenantA, debtorA, "evid-rls/tenant-a")
+	interactionB := seedInteraction(t, ctx, pool, tenantB, debtorB, "evid-rls/tenant-b")
+
+	// Seed via the owner pool (setup only — the owner role bypasses RLS).
+	evaluateOnce(t, ctx, pool, tenantA, interactionA)
+	evaluateOnce(t, ctx, pool, tenantB, interactionB)
+
+	appPool, err := pgxpool.New(ctx, appDatabaseURL)
+	if err != nil {
+		t.Fatalf("connect app database: %v", err)
+	}
+	defer appPool.Close()
+
+	// (a) Tenant B's evidence_records / ledger_chain_heads rows must not be
+	// readable under tenant A's RLS context.
+	tx, err := appPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin app tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
+		t.Fatalf("set tenant context: %v", err)
+	}
+
+	rows, err := tx.Query(ctx, `SELECT tenant_id FROM evidence_records WHERE interaction_event_id = $1`, interactionB)
+	if err != nil {
+		t.Fatalf("query tenant B evidence under tenant A context: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatal("tenant B's evidence_records row was readable under tenant A's RLS context")
+	}
+	rows.Close()
+
+	var headExists bool
+	if err := tx.QueryRow(ctx, `SELECT exists(SELECT 1 FROM ledger_chain_heads WHERE tenant_id = $1)`, tenantB).Scan(&headExists); err != nil {
+		t.Fatalf("query tenant B ledger_chain_heads under tenant A context: %v", err)
+	}
+	if headExists {
+		t.Fatal("tenant B's ledger_chain_heads row was readable under tenant A's RLS context")
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback tx: %v", err)
+	}
+
+	// (b) The store-backed VerifyChain adapter under tenant A's restricted
+	// role must see only tenant A's chain.
+	verifier := postgres.NewChainVerifierFromPool(appPool)
+	resultA, err := verifier.VerifyChain(ctx, tenantA)
+	if err != nil {
+		t.Fatalf("VerifyChain tenant A (restricted role): %v", err)
+	}
+	if !resultA.OK || resultA.Count != 1 {
+		t.Fatalf("tenant A VerifyChain (restricted role) = %+v, want OK with exactly 1 record (not tenant B's)", resultA)
+	}
+}
+
 // TestPreMigrationEvaluationHasNoEvidenceRecord covers *Pre-migration
 // evaluation has no evidence record*: an evaluations row inserted directly
 // (bypassing the ledger append path, simulating a pre-#3 evaluation) must
