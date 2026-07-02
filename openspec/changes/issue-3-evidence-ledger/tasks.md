@@ -161,7 +161,7 @@ Satisfies: *Evidence Append Is Atomic and Exactly-Once*, *Chain Linkage and
 Per-Tenant Monotonic Sequence*, *Evidence Records Are Write-Once*
 (`[integration]` half), *No Backfill for Pre-Existing Evaluations*.
 
-- [ ] 3.1 [integration] Write
+- [x] 3.1 [integration] Write
       `internal/postgres/evidence_integration_test.go` (`testing.Short()`
       skip, requires `DATABASE_URL`) covering, before the hook exists:
       - a successful evaluation produces exactly one `evidence_records`
@@ -195,7 +195,7 @@ Per-Tenant Monotonic Sequence*, *Evidence Records Are Write-Once*
         do not block on each other and each tenant's chain is correct
         independently (*Concurrent appends across different tenants
         proceed independently*)
-- [ ] 3.2 Implement the append hook inside
+- [x] 3.2 Implement the append hook inside
       `EvaluationStore.CreateEvaluation` in
       `internal/postgres/adapters.go`, extending the existing
       `tenantdb.WithTenantTx` closure per design.md §Persistence hook:
@@ -209,7 +209,7 @@ Per-Tenant Monotonic Sequence*, *Evidence Records Are Write-Once*
       `ListEvidenceRecordsByTenant` inside `WithTenantTx`, maps rows to
       `[]ledger.EvidenceRecord`, calls `ledger.VerifyChain`) used by Work
       Unit 5's CLI.
-- [ ] 3.3 [integration] Extend the same test file with the write-once
+- [x] 3.3 [integration] Extend the same test file with the write-once
       trigger cases, using the DB **owner** connection (bypasses RLS,
       proving role-independence): direct `UPDATE evidence_records SET
       hash = ...` on an existing row fails with the append-only exception
@@ -217,7 +217,7 @@ Per-Tenant Monotonic Sequence*, *Evidence Records Are Write-Once*
       evidence_records fails*); direct `DELETE FROM evidence_records
       WHERE id = ...` fails and the row still exists afterward (*Direct
       SQL DELETE against evidence_records fails*).
-- [ ] 3.4 [integration] Extend the same test file with tampered-chain
+- [x] 3.4 [integration] Extend the same test file with tampered-chain
       detection using the owner connection to bypass the write-once
       trigger's normal path is not possible (trigger blocks it
       unconditionally) — instead simulate tampering the way the spec
@@ -230,7 +230,7 @@ Per-Tenant Monotonic Sequence*, *Evidence Records Are Write-Once*
       the correct `seq` for each of the four tampered-field cases
       (*VerifyChain detects a tampered overall_outcome / inputs_digest /
       prev_hash / seq*).
-- [ ] 3.5 [integration] Add a case simulating a pre-migration evaluation:
+- [x] 3.5 [integration] Add a case simulating a pre-migration evaluation:
       insert an `evaluations` row directly (bypassing the ledger append
       path) and assert no matching `evidence_records` row exists for its
       `evaluation_id` (*Pre-migration evaluation has no evidence record*).
