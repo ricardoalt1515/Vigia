@@ -84,7 +84,7 @@ Satisfies: *Canonical Hashing Is Deterministic*, *VerifyChain Detects the
 First Break* (`[unit]` scenarios), *Evidence Package Export* (`[unit]`
 scenario: `VerifyPackage` detects tampering).
 
-- [ ] 2.1 [unit] Write `internal/ledger/ledger_test.go` before
+- [x] 2.1 [unit] Write `internal/ledger/ledger_test.go` before
       `ledger.go` exists: define `Body`, `EvidenceRecord`,
       `GenesisPrevHash = ""` fixtures. Write the **golden-hash test**
       first (it must fail to compile until 2.2/2.3 exist): construct one
@@ -93,20 +93,20 @@ scenario: `VerifyPackage` detects tampering).
       InputsDigest: <computed in 2.4>, CreatedAt: fixed UTC instant}` with
       `prev_hash = GenesisPrevHash`. Satisfies *Golden-hash test pins the
       exact canonical bytes* `[unit]`.
-- [ ] 2.2 Implement `internal/ledger/ledger.go`: `GenesisPrevHash`, `Body`,
+- [x] 2.2 Implement `internal/ledger/ledger.go`: `GenesisPrevHash`, `Body`,
       `EvidenceRecord`, `canonicalBody` (declaration-order `encoding/json`
       marshal, `created_at` rendered via the fixed
       `canonicalTimeLayout = "2006-01-02T15:04:05.000000Z07:00"`
       formatter), `Hash(prevHash string, body Body) string` =
       `hex(sha256(prevHash-ASCII || canonicalBody(body)))`.
-- [ ] 2.3 [unit] **Compute-once, hardcode consciously**: run the golden
+- [x] 2.3 [unit] **Compute-once, hardcode consciously**: run the golden
       test once against the real implementation, copy the printed/asserted
       hex hash into the test as the pinned literal expected value (do not
       leave it computed at test-run time), then re-run the test suite to
       confirm it passes against the hardcoded literal. Add a one-line
       comment above the literal: `// pinned via 2.3 — any diff means
       canonicalization drifted, do not silently update`.
-- [ ] 2.4 [unit] Write table-driven cases in `ledger_test.go` (extend or
+- [x] 2.4 [unit] Write table-driven cases in `ledger_test.go` (extend or
       new `internal/ledger/digest_test.go`) for `ComputeInputsDigest`
       before implementing it: same results in two shuffled input orders →
       identical digest; changing `code`/`outcome`/`severity`/`rationale`
@@ -114,10 +114,10 @@ scenario: `VerifyPackage` detects tampering).
       the same hash*, *Detector results are sorted by detector_code before
       digesting*, *inputs_digest changes when a detector result field
       changes* `[unit]`.
-- [ ] 2.5 Implement `ComputeInputsDigest(results []DetectorResult) string`
+- [x] 2.5 Implement `ComputeInputsDigest(results []DetectorResult) string`
       in `internal/ledger/ledger.go`: sort by `Code`, canonical-marshal,
       `hex(sha256(...))`.
-- [ ] 2.6 [unit] Write `internal/ledger/verify_test.go` before
+- [x] 2.6 [unit] Write `internal/ledger/verify_test.go` before
       `verify.go` exists: table-driven `VerifyChain` cases — intact chain
       → `OK`; empty chain → `OK`, `Count: 0`; single-record chain (`seq=1`,
       `prev_hash=""`) → `OK`; flipped `overall_outcome` → break at that
@@ -128,18 +128,18 @@ scenario: `VerifyPackage` detects tampering).
       handles an empty chain*, *VerifyChain handles a single-record chain*
       `[unit]` (tampered-field scenarios are re-verified against real
       Postgres in Work Unit 3's integration tests).
-- [ ] 2.7 Implement `internal/ledger/verify.go`: `VerifyResult` struct
+- [x] 2.7 Implement `internal/ledger/verify.go`: `VerifyResult` struct
       (`OK`, `Count`, `BreakAtSeq`, `BreakReason`), `VerifyChain(records
       []EvidenceRecord) VerifyResult` per design.md's per-record check
       order (genesis → seq contiguity → prev_hash linkage → hash
       integrity).
-- [ ] 2.8 [unit] Write `internal/ledger/package_test.go` before
+- [x] 2.8 [unit] Write `internal/ledger/package_test.go` before
       `package.go` exists: build a `Package` via `BuildPackage`, assert
       `VerifyPackage` returns `OK`; tamper `record.hash` → not OK; tamper
       one `detector_results[].rationale` without updating `inputs_digest`
       → `BreakReason: "inputs_digest mismatch"`. Satisfies *VerifyPackage
       detects a tampered exported package* `[unit]`.
-- [ ] 2.9 Implement `internal/ledger/package.go`: `Package` DTO
+- [x] 2.9 Implement `internal/ledger/package.go`: `Package` DTO
       (`schema_version: "vigia.evidence.v1"`, `interaction`, `evaluation`,
       `detector_results`, `record`), `BuildPackage(rec EvidenceRecord,
       interaction PackageInteraction, eval PackageEvaluation, results

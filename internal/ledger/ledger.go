@@ -1,0 +1,137 @@
+// Package ledger implements the append-only, hash-chained evidence ledger
+// core: canonical hashing, chain verification, and self-contained package
+// export/verification. This package is pure — zero I/O, zero database
+// access. Persistence lives in internal/postgres.
+package ledger
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"sort"
+	"time"
+)
+
+// GenesisPrevHash is the prev_hash of a tenant's first EvidenceRecord: the
+// empty string "". Pinned — the golden-hash test depends on it.
+const GenesisPrevHash = ""
+
+// canonicalTimeLayout renders created_at deterministically: always UTC,
+// always 6-digit microseconds, always trailing 'Z'. This is the ONLY
+// acceptable timestamp format for hashing — encoding/json's default
+// RFC3339Nano format has trailing-zero variance that would break
+// re-verification across a DB round-trip.
+const canonicalTimeLayout = "2006-01-02T15:04:05.000000Z07:00"
+
+// DetectorResult is one detector's contribution to inputs_digest.
+type DetectorResult struct {
+	Code      string
+	Outcome   string // core.DetectorOutcome value, e.g. "pass" | "fail"
+	Severity  string
+	Rationale string
+}
+
+// Body is the hashed content of a record. FIELD ORDER IS LOAD-BEARING:
+// encoding/json emits struct fields in declaration order, and that order is
+// baked into every stored hash. Do not reorder, add, or remove fields
+// without a migration + a new golden hash. CreatedAt is serialized by the
+// fixed microsecond UTC formatter (see canonicalBody), NOT time.Time's
+// default JSON marshaling.
+type Body struct {
+	TenantID            string    `json:"tenant_id"`
+	InteractionEventID  string    `json:"interaction_event_id"`
+	EvaluationID        string    `json:"evaluation_id"`
+	Seq                 int64     `json:"seq"`
+	OverallOutcome      string    `json:"overall_outcome"`
+	PolicyBundleVersion string    `json:"policy_bundle_version"`
+	InputsDigest        string    `json:"inputs_digest"`
+	CreatedAt           time.Time `json:"created_at"`
+}
+
+// EvidenceRecord is a persisted, hashed ledger entry.
+type EvidenceRecord struct {
+	ID       string
+	Body     Body
+	PrevHash string
+	Hash     string
+}
+
+// canonicalBodyDTO mirrors Body but renders CreatedAt through the fixed
+// canonicalTimeLayout string instead of time.Time's default marshaling, so
+// the hashed bytes never drift with Go's default JSON time format.
+type canonicalBodyDTO struct {
+	TenantID            string `json:"tenant_id"`
+	InteractionEventID  string `json:"interaction_event_id"`
+	EvaluationID        string `json:"evaluation_id"`
+	Seq                 int64  `json:"seq"`
+	OverallOutcome      string `json:"overall_outcome"`
+	PolicyBundleVersion string `json:"policy_bundle_version"`
+	InputsDigest        string `json:"inputs_digest"`
+	CreatedAt           string `json:"created_at"`
+}
+
+// canonicalBody marshals Body deterministically. created_at is rendered by a
+// FIXED formatter so DB round-trips re-verify: always UTC, always 6-digit
+// microseconds, always trailing 'Z'.
+func canonicalBody(b Body) []byte {
+	dto := canonicalBodyDTO{
+		TenantID:            b.TenantID,
+		InteractionEventID:  b.InteractionEventID,
+		EvaluationID:        b.EvaluationID,
+		Seq:                 b.Seq,
+		OverallOutcome:      b.OverallOutcome,
+		PolicyBundleVersion: b.PolicyBundleVersion,
+		InputsDigest:        b.InputsDigest,
+		CreatedAt:           b.CreatedAt.UTC().Format(canonicalTimeLayout),
+	}
+	// encoding/json marshals struct fields in declaration order; the error
+	// path here is unreachable for this DTO (no channels/funcs/cyclic types).
+	out, err := json.Marshal(dto)
+	if err != nil {
+		panic("ledger: canonicalBody: unexpected marshal error: " + err.Error())
+	}
+	return out
+}
+
+// Hash = hex(sha256(prevHash-ASCII bytes || canonicalBody(body))). Pure.
+func Hash(prevHash string, body Body) string {
+	sum := sha256.New()
+	sum.Write([]byte(prevHash))
+	sum.Write(canonicalBody(body))
+	return hex.EncodeToString(sum.Sum(nil))
+}
+
+// canonicalDetectorResult mirrors DetectorResult for deterministic
+// marshaling (declaration order is already fixed by the struct itself).
+type canonicalDetectorResult struct {
+	Code      string `json:"code"`
+	Outcome   string `json:"outcome"`
+	Severity  string `json:"severity"`
+	Rationale string `json:"rationale"`
+}
+
+// ComputeInputsDigest = hex(sha256(canonical(sorted results))). Results are
+// sorted by Code first (the ordering invariant); each entry contributes
+// code+outcome+severity+rationale.
+func ComputeInputsDigest(results []DetectorResult) string {
+	sorted := make([]DetectorResult, len(results))
+	copy(sorted, results)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Code < sorted[j].Code })
+
+	dtos := make([]canonicalDetectorResult, 0, len(sorted))
+	for _, r := range sorted {
+		dtos = append(dtos, canonicalDetectorResult{
+			Code:      r.Code,
+			Outcome:   r.Outcome,
+			Severity:  r.Severity,
+			Rationale: r.Rationale,
+		})
+	}
+
+	out, err := json.Marshal(dtos)
+	if err != nil {
+		panic("ledger: ComputeInputsDigest: unexpected marshal error: " + err.Error())
+	}
+	sum := sha256.Sum256(out)
+	return hex.EncodeToString(sum[:])
+}
