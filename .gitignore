@@ -21,3 +21,9 @@ coverage/
 /data/synthetic/harness-runs/
 # Local Pi runtime state
 .atl/
+
+# Local agent/process scratch (not part of the tracked project)
+.pi/
+.pi-subagents/
+triage/
+reviews/
