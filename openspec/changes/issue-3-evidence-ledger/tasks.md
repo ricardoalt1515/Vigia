@@ -309,7 +309,7 @@ tests only, no `DATABASE_URL` required for 5.1).
 
 Satisfies: *Seed Produces Evidence Records for Demo Data* (all scenarios).
 
-- [ ] 6.1 [integration] Extend the seed integration test
+- [x] 6.1 [integration] Extend the seed integration test
       (`cmd/seed/devdata_test.go` or equivalent, `testing.Short()` skip)
       asserting: after `cmd/seed dev-data` runs against a fresh database,
       each resulting `evaluations` row has a corresponding
@@ -318,7 +318,7 @@ Satisfies: *Seed Produces Evidence Records for Demo Data* (all scenarios).
       is required beyond what Work Unit 3's hook already provides — this
       task only asserts the existing seed path (`EvaluateInteraction` →
       `CreateEvaluation` → append) produces evidence automatically.
-- [ ] 6.2 Update dev docs (`docs/` — whichever file documents
+- [x] 6.2 Update dev docs (`docs/` — whichever file documents
       `cmd/seed dev-data` / local dev workflow) to mention
       `cmd/ledger-verify -tenant-id <demo-tenant-id>` so the ledger is
       exercisable against seed data, and to mention
