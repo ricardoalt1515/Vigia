@@ -25,8 +25,14 @@ type Querier interface {
 	// Used by cmd/seed to detect whether a pre-existing (re-run) interaction
 	// still needs to be backfilled with an evaluation.
 	GetEvaluationByInteractionEventID(ctx context.Context, arg GetEvaluationByInteractionEventIDParams) (Evaluation, error)
+	// Export endpoint lookup.
+	GetEvidenceRecordByInteraction(ctx context.Context, arg GetEvidenceRecordByInteractionParams) (EvidenceRecord, error)
+	// Evidence export lookup (issue #3): fetch a single interaction scoped to
+	// its tenant.
+	GetInteractionEventByID(ctx context.Context, arg GetInteractionEventByIDParams) (GetInteractionEventByIDRow, error)
 	GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error)
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
+	InsertEvidenceRecord(ctx context.Context, arg InsertEvidenceRecordParams) (EvidenceRecord, error)
 	ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsRow, error)
 	// Evaluation runs synchronously, once, at ingest time for this change (#2):
 	// at most one evaluations row per interaction and at most one
@@ -35,10 +41,18 @@ type Querier interface {
 	// inference accurate for overall_outcome/reason.
 	ListCurrentTenantInteractionsWithOutcome(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsWithOutcomeRow, error)
 	ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDebtorsByTenantRow, error)
+	// Package detector layer for evidence export, sorted by detector_code.
+	ListDetectorResultRowsByEvaluation(ctx context.Context, evaluationID pgtype.UUID) ([]ListDetectorResultRowsByEvaluationRow, error)
 	ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDetectorResultRowsByTenantRow, error)
+	// Store-backed VerifyChain: replay a tenant's chain ordered by seq.
+	ListEvidenceRecordsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]EvidenceRecord, error)
 	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListInteractionEventsByTenantRow, error)
 	ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListPolicyBundleRulesByTenantRow, error)
 	ListTenantAPIKeysByTenant(ctx context.Context, tenantID pgtype.UUID) ([]TenantApiKey, error)
+	// Insert-or-lock: first append inserts the genesis head; later appends take the
+	// row lock via the no-op self-update. Either way returns the locked head.
+	LockChainHead(ctx context.Context, arg LockChainHeadParams) (LockChainHeadRow, error)
+	UpdateChainHead(ctx context.Context, arg UpdateChainHeadParams) error
 }
 
 var _ Querier = (*Queries)(nil)

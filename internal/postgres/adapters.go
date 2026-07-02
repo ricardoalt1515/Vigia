@@ -16,6 +16,7 @@ import (
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/httpapi"
+	"github.com/ricardoalt1515/vigia/internal/ledger"
 	"github.com/ricardoalt1515/vigia/internal/tenantdb"
 )
 
@@ -201,6 +202,7 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			return err
 		}
 
+		detectorResults := make([]ledger.DetectorResult, 0, len(in.DetectorResults))
 		for _, dr := range in.DetectorResults {
 			payload, err := json.Marshal(detectorResultPayload{Rationale: dr.Rationale})
 			if err != nil {
@@ -217,6 +219,68 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			}); err != nil {
 				return err
 			}
+			detectorResults = append(detectorResults, ledger.DetectorResult{
+				Code:      dr.DetectorCode,
+				Outcome:   string(dr.Outcome),
+				Severity:  string(dr.Severity),
+				Rationale: dr.Rationale,
+			})
+		}
+
+		// Evidence ledger append (issue #3): one more write inside this same
+		// tenantdb.WithTenantTx call, after the header + detector rows. A
+		// rollback anywhere above (or below) leaves no evaluations row, no
+		// detector_result_rows row, no evidence_records row, and the
+		// ledger_chain_heads row unchanged — the head lock and the evidence
+		// insert commit atomically with everything else.
+		head, err := q.LockChainHead(ctx, vigiaDB.LockChainHeadParams{
+			TenantID: tenantUUID,
+			LastHash: ledger.GenesisPrevHash,
+		})
+		if err != nil {
+			return err
+		}
+
+		seq := head.LastSeq + 1
+		prevHash := head.LastHash
+		// created_at has no DB default: the ledger generates and inserts the
+		// exact microsecond-truncated value it hashes, so a DB round-trip
+		// never drifts the hash (Postgres timestamptz is microsecond).
+		createdAt := time.Now().UTC().Truncate(time.Microsecond)
+
+		body := ledger.Body{
+			TenantID:            in.TenantID,
+			InteractionEventID:  in.InteractionEventID,
+			EvaluationID:        uuidString(header.ID),
+			Seq:                 seq,
+			OverallOutcome:      header.OverallOutcome,
+			PolicyBundleVersion: header.PolicyBundleVersion,
+			InputsDigest:        ledger.ComputeInputsDigest(detectorResults),
+			CreatedAt:           createdAt,
+		}
+		hash := ledger.Hash(prevHash, body)
+
+		if _, err := q.InsertEvidenceRecord(ctx, vigiaDB.InsertEvidenceRecordParams{
+			TenantID:            tenantUUID,
+			InteractionEventID:  interactionUUID,
+			EvaluationID:        pgtype.UUID{Bytes: header.ID.Bytes, Valid: true},
+			Seq:                 seq,
+			PrevHash:            prevHash,
+			Hash:                hash,
+			OverallOutcome:      body.OverallOutcome,
+			PolicyBundleVersion: body.PolicyBundleVersion,
+			InputsDigest:        body.InputsDigest,
+			CreatedAt:           pgtype.Timestamptz{Time: createdAt, Valid: true},
+		}); err != nil {
+			return err
+		}
+
+		if err := q.UpdateChainHead(ctx, vigiaDB.UpdateChainHeadParams{
+			TenantID: tenantUUID,
+			LastSeq:  seq,
+			LastHash: hash,
+		}); err != nil {
+			return err
 		}
 
 		result = core.Evaluation{
@@ -269,3 +333,172 @@ func (r *SummaryReader) CountOutOfHours(ctx context.Context, tenantID string) (i
 }
 
 var _ httpapi.SummaryReader = (*SummaryReader)(nil)
+
+// ChainVerifier is the store-backed adapter around ledger.VerifyChain: it
+// loads a tenant's evidence records ordered by seq inside a tenant-scoped
+// transaction, maps them to the pure ledger.EvidenceRecord shape, and
+// delegates to ledger.VerifyChain. Used by cmd/ledger-verify.
+type ChainVerifier struct {
+	db tenantdb.Beginner
+}
+
+func NewChainVerifier(db tenantdb.Beginner) *ChainVerifier {
+	return &ChainVerifier{db: db}
+}
+
+func NewChainVerifierFromPool(pool *pgxpool.Pool) *ChainVerifier {
+	return NewChainVerifier(poolBeginner{pool: pool})
+}
+
+func (v *ChainVerifier) VerifyChain(ctx context.Context, tenantID string) (ledger.VerifyResult, error) {
+	var result ledger.VerifyResult
+	err := tenantdb.WithTenantTx(ctx, v.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		tenantUUID, err := parseUUID(tenantID)
+		if err != nil {
+			return err
+		}
+		rows, err := vigiaDB.New(tx).ListEvidenceRecordsByTenant(ctx, tenantUUID)
+		if err != nil {
+			return err
+		}
+		records := make([]ledger.EvidenceRecord, 0, len(rows))
+		for _, row := range rows {
+			records = append(records, evidenceRowToRecord(row))
+		}
+		result = ledger.VerifyChain(records)
+		return nil
+	})
+	if err != nil {
+		return ledger.VerifyResult{}, err
+	}
+	return result, nil
+}
+
+// EvidenceReader assembles a self-contained evidence export package for one
+// interaction, scoped to the caller's tenant. Any missing piece (no
+// evaluation, no evidence record, unknown interaction) collapses into
+// httpapi.ErrEvidenceNotFound — the same response regardless of which case
+// occurred, so nothing leaks about other tenants' data.
+type EvidenceReader struct {
+	db tenantdb.Beginner
+}
+
+func NewEvidenceReader(db tenantdb.Beginner) *EvidenceReader {
+	return &EvidenceReader{db: db}
+}
+
+func NewEvidenceReaderFromPool(pool *pgxpool.Pool) *EvidenceReader {
+	return NewEvidenceReader(poolBeginner{pool: pool})
+}
+
+func (r *EvidenceReader) GetEvidencePackage(ctx context.Context, tenantID, interactionID string) (ledger.Package, error) {
+	var pkg ledger.Package
+	err := tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		q := vigiaDB.New(tx)
+
+		tenantUUID, err := parseUUID(tenantID)
+		if err != nil {
+			return err
+		}
+		interactionUUID, err := parseUUID(interactionID)
+		if err != nil {
+			return httpapi.ErrEvidenceNotFound
+		}
+
+		record, err := q.GetEvidenceRecordByInteraction(ctx, vigiaDB.GetEvidenceRecordByInteractionParams{
+			TenantID:           tenantUUID,
+			InteractionEventID: interactionUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return httpapi.ErrEvidenceNotFound
+			}
+			return err
+		}
+
+		interactionRow, err := q.GetInteractionEventByID(ctx, vigiaDB.GetInteractionEventByIDParams{
+			ID:       interactionUUID,
+			TenantID: tenantUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return httpapi.ErrEvidenceNotFound
+			}
+			return err
+		}
+
+		evaluationRow, err := q.GetEvaluationByInteractionEventID(ctx, vigiaDB.GetEvaluationByInteractionEventIDParams{
+			TenantID:           tenantUUID,
+			InteractionEventID: interactionUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return httpapi.ErrEvidenceNotFound
+			}
+			return err
+		}
+
+		detectorRows, err := q.ListDetectorResultRowsByEvaluation(ctx, record.EvaluationID)
+		if err != nil {
+			return err
+		}
+		results := make([]ledger.DetectorResult, 0, len(detectorRows))
+		for _, dr := range detectorRows {
+			var payload detectorResultPayload
+			if err := json.Unmarshal(dr.ResultPayload, &payload); err != nil {
+				return err
+			}
+			results = append(results, ledger.DetectorResult{
+				Code:      dr.DetectorCode,
+				Outcome:   dr.Outcome,
+				Severity:  dr.Severity,
+				Rationale: payload.Rationale,
+			})
+		}
+
+		rec := evidenceRowToRecord(record)
+		pkg = ledger.BuildPackage(rec,
+			ledger.PackageInteraction{
+				ID:         uuidString(interactionRow.ID),
+				TenantID:   uuidString(interactionRow.TenantID),
+				Channel:    interactionRow.Channel,
+				Direction:  interactionRow.Direction,
+				OccurredAt: interactionRow.OccurredAt.Time,
+			},
+			ledger.PackageEvaluation{
+				ID:                  uuidString(evaluationRow.ID),
+				OverallOutcome:      evaluationRow.OverallOutcome,
+				PolicyBundleVersion: evaluationRow.PolicyBundleVersion,
+				CreatedAt:           evaluationRow.CreatedAt.Time,
+			},
+			results,
+		)
+		return nil
+	})
+	if err != nil {
+		return ledger.Package{}, err
+	}
+	return pkg, nil
+}
+
+var _ httpapi.EvidenceReader = (*EvidenceReader)(nil)
+
+// evidenceRowToRecord maps a generated evidence_records row to the pure
+// ledger.EvidenceRecord shape VerifyChain/VerifyPackage operate on.
+func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {
+	return ledger.EvidenceRecord{
+		ID: uuidString(row.ID),
+		Body: ledger.Body{
+			TenantID:            uuidString(row.TenantID),
+			InteractionEventID:  uuidString(row.InteractionEventID),
+			EvaluationID:        uuidString(row.EvaluationID),
+			Seq:                 row.Seq,
+			OverallOutcome:      row.OverallOutcome,
+			PolicyBundleVersion: row.PolicyBundleVersion,
+			InputsDigest:        row.InputsDigest,
+			CreatedAt:           row.CreatedAt.Time,
+		},
+		PrevHash: row.PrevHash,
+		Hash:     row.Hash,
+	}
+}

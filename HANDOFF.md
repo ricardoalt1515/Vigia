@@ -25,6 +25,15 @@ go run ./cmd/api
 #    Ctrl-C when done.
 make worker
 
+# 5b. (Issue #3) Every seeded evaluation now appends a hash-chained evidence_records
+#     row. Export a seeded interaction's self-contained evidence package (requires the
+#     API server from step 4 running and the tenant_api_key from step 3):
+curl -H "Authorization: Bearer <tenant_api_key>" \
+  http://localhost:8080/v1/interactions/<interaction-id>/evidence
+
+#     Verify the demo tenant's whole chain is intact from the command line:
+go run ./cmd/ledger-verify -tenant-id <demo-tenant-id>
+
 # 6. Install Next.js console dependencies (first time only)
 make console-install
 

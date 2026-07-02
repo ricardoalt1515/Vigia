@@ -68,6 +68,50 @@ func (q *Queries) CreateInteractionEvent(ctx context.Context, arg CreateInteract
 	return i, err
 }
 
+const getInteractionEventByID = `-- name: GetInteractionEventByID :one
+SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
+FROM interaction_events
+WHERE id = $1 AND tenant_id = $2
+`
+
+type GetInteractionEventByIDParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+type GetInteractionEventByIDRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	TenantID       pgtype.UUID        `json:"tenant_id"`
+	DebtorID       pgtype.UUID        `json:"debtor_id"`
+	Channel        string             `json:"channel"`
+	Direction      string             `json:"direction"`
+	Status         string             `json:"status"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef  *string            `json:"transcript_ref"`
+	DebtorTimezone string             `json:"debtor_timezone"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+// Evidence export lookup (issue #3): fetch a single interaction scoped to
+// its tenant.
+func (q *Queries) GetInteractionEventByID(ctx context.Context, arg GetInteractionEventByIDParams) (GetInteractionEventByIDRow, error) {
+	row := q.db.QueryRow(ctx, getInteractionEventByID, arg.ID, arg.TenantID)
+	var i GetInteractionEventByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.DebtorID,
+		&i.Channel,
+		&i.Direction,
+		&i.Status,
+		&i.OccurredAt,
+		&i.TranscriptRef,
+		&i.DebtorTimezone,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listCurrentTenantInteractions = `-- name: ListCurrentTenantInteractions :many
 SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
 FROM interaction_events

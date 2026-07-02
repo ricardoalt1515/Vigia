@@ -185,4 +185,42 @@ func TestSeedDevDataIntegration(t *testing.T) {
 	if !sawBlock {
 		t.Error("expected at least one seeded interaction to evaluate to BLOCK (fail)")
 	}
+
+	// Assert every seeded evaluation has a corresponding evidence_records row
+	// (issue #3 spec "Seeded evaluations produce evidence records"), with
+	// seq starting at 1 for this tenant. No new seed logic is required: the
+	// existing seed path (EvaluateInteraction -> CreateEvaluation -> append)
+	// produces evidence automatically.
+	evidenceRows, err := tx.Query(ctx, `
+		SELECT er.seq
+		FROM evidence_records er
+		WHERE er.tenant_id = $1
+		ORDER BY er.seq ASC
+	`, tenant.ID)
+	if err != nil {
+		t.Fatalf("query evidence_records: %v", err)
+	}
+	defer evidenceRows.Close()
+	var seqs []int64
+	for evidenceRows.Next() {
+		var seq int64
+		if err := evidenceRows.Scan(&seq); err != nil {
+			t.Fatalf("scan evidence_records seq: %v", err)
+		}
+		seqs = append(seqs, seq)
+	}
+	if err := evidenceRows.Err(); err != nil {
+		t.Fatalf("iterate evidence_records: %v", err)
+	}
+	if len(seqs) != outcomeCount {
+		t.Fatalf("evidence_records rows = %d, want %d (one per evaluation)", len(seqs), outcomeCount)
+	}
+	if len(seqs) == 0 || seqs[0] != 1 {
+		t.Fatalf("evidence_records seqs = %v, want to start at 1", seqs)
+	}
+	for i, seq := range seqs {
+		if seq != int64(i+1) {
+			t.Fatalf("evidence_records seqs = %v, want contiguous 1..%d", seqs, len(seqs))
+		}
+	}
 }

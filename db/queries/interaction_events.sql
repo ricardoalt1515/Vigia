@@ -1,3 +1,10 @@
+-- name: GetInteractionEventByID :one
+-- Evidence export lookup (issue #3): fetch a single interaction scoped to
+-- its tenant.
+SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
+FROM interaction_events
+WHERE id = $1 AND tenant_id = $2;
+
 -- name: CreateInteractionEvent :one
 INSERT INTO interaction_events (tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
