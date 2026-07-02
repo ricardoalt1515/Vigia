@@ -374,6 +374,115 @@ func (v *ChainVerifier) VerifyChain(ctx context.Context, tenantID string) (ledge
 	return result, nil
 }
 
+// EvidenceReader assembles a self-contained evidence export package for one
+// interaction, scoped to the caller's tenant. Any missing piece (no
+// evaluation, no evidence record, unknown interaction) collapses into
+// httpapi.ErrEvidenceNotFound — the same response regardless of which case
+// occurred, so nothing leaks about other tenants' data.
+type EvidenceReader struct {
+	db tenantdb.Beginner
+}
+
+func NewEvidenceReader(db tenantdb.Beginner) *EvidenceReader {
+	return &EvidenceReader{db: db}
+}
+
+func NewEvidenceReaderFromPool(pool *pgxpool.Pool) *EvidenceReader {
+	return NewEvidenceReader(poolBeginner{pool: pool})
+}
+
+func (r *EvidenceReader) GetEvidencePackage(ctx context.Context, tenantID, interactionID string) (ledger.Package, error) {
+	var pkg ledger.Package
+	err := tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		q := vigiaDB.New(tx)
+
+		tenantUUID, err := parseUUID(tenantID)
+		if err != nil {
+			return err
+		}
+		interactionUUID, err := parseUUID(interactionID)
+		if err != nil {
+			return httpapi.ErrEvidenceNotFound
+		}
+
+		record, err := q.GetEvidenceRecordByInteraction(ctx, vigiaDB.GetEvidenceRecordByInteractionParams{
+			TenantID:           tenantUUID,
+			InteractionEventID: interactionUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return httpapi.ErrEvidenceNotFound
+			}
+			return err
+		}
+
+		interactionRow, err := q.GetInteractionEventByID(ctx, vigiaDB.GetInteractionEventByIDParams{
+			ID:       interactionUUID,
+			TenantID: tenantUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return httpapi.ErrEvidenceNotFound
+			}
+			return err
+		}
+
+		evaluationRow, err := q.GetEvaluationByInteractionEventID(ctx, vigiaDB.GetEvaluationByInteractionEventIDParams{
+			TenantID:           tenantUUID,
+			InteractionEventID: interactionUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return httpapi.ErrEvidenceNotFound
+			}
+			return err
+		}
+
+		detectorRows, err := q.ListDetectorResultRowsByEvaluation(ctx, record.EvaluationID)
+		if err != nil {
+			return err
+		}
+		results := make([]ledger.DetectorResult, 0, len(detectorRows))
+		for _, dr := range detectorRows {
+			var payload detectorResultPayload
+			if err := json.Unmarshal(dr.ResultPayload, &payload); err != nil {
+				return err
+			}
+			results = append(results, ledger.DetectorResult{
+				Code:      dr.DetectorCode,
+				Outcome:   dr.Outcome,
+				Severity:  dr.Severity,
+				Rationale: payload.Rationale,
+			})
+		}
+
+		rec := evidenceRowToRecord(record)
+		pkg = ledger.BuildPackage(rec,
+			ledger.PackageInteraction{
+				ID:         uuidString(interactionRow.ID),
+				TenantID:   uuidString(interactionRow.TenantID),
+				Channel:    interactionRow.Channel,
+				Direction:  interactionRow.Direction,
+				OccurredAt: interactionRow.OccurredAt.Time,
+			},
+			ledger.PackageEvaluation{
+				ID:                  uuidString(evaluationRow.ID),
+				OverallOutcome:      evaluationRow.OverallOutcome,
+				PolicyBundleVersion: evaluationRow.PolicyBundleVersion,
+				CreatedAt:           evaluationRow.CreatedAt.Time,
+			},
+			results,
+		)
+		return nil
+	})
+	if err != nil {
+		return ledger.Package{}, err
+	}
+	return pkg, nil
+}
+
+var _ httpapi.EvidenceReader = (*EvidenceReader)(nil)
+
 // evidenceRowToRecord maps a generated evidence_records row to the pure
 // ledger.EvidenceRecord shape VerifyChain/VerifyPackage operate on.
 func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {

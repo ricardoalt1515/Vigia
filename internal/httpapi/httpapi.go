@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ricardoalt1515/vigia/internal/auth"
+	"github.com/ricardoalt1515/vigia/internal/ledger"
 )
 
 // Interaction is the API DTO for GET /v1/interactions. Outcome and Reason
@@ -33,22 +34,40 @@ type SummaryReader interface {
 	CountOutOfHours(ctx context.Context, tenantID string) (int64, error)
 }
 
+// ErrEvidenceNotFound is returned by EvidenceReader when no exportable
+// evidence package exists for the requested interaction: the interaction
+// does not exist, belongs to another tenant, has not been evaluated, or
+// predates the evidence ledger (issue #3 Decision 7: no backfill). All four
+// cases collapse to the same generic 404 — the handler never distinguishes
+// them in the response, so nothing about other tenants' data (or which case
+// occurred) leaks.
+var ErrEvidenceNotFound = errors.New("httpapi: evidence not found")
+
+// EvidenceReader loads a self-contained, hash-verifiable evidence package
+// for one interaction, scoped to the caller's tenant.
+type EvidenceReader interface {
+	GetEvidencePackage(ctx context.Context, tenantID, interactionID string) (ledger.Package, error)
+}
+
 type Server struct {
 	authenticator *auth.Authenticator
 	interactions  InteractionReader
 	summary       SummaryReader
+	evidence      EvidenceReader
 	mux           *http.ServeMux
 }
 
-func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader) *Server {
+func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader, evidence EvidenceReader) *Server {
 	s := &Server{
 		authenticator: authenticator,
 		interactions:  interactions,
 		summary:       summary,
+		evidence:      evidence,
 		mux:           http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /v1/interactions", s.handleGetInteractions)
 	s.mux.HandleFunc("GET /v1/summary", s.handleGetSummary)
+	s.mux.HandleFunc("GET /v1/interactions/{id}/evidence", s.handleGetEvidence)
 	return s
 }
 
@@ -106,6 +125,34 @@ func (s *Server) handleGetSummary(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(summaryResponse{OutOfHoursCount: count}); err != nil {
+		return
+	}
+}
+
+func (s *Server) handleGetEvidence(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	id := r.PathValue("id")
+	pkg, err := s.evidence.GetEvidencePackage(r.Context(), tenant.TenantID, id)
+	if err != nil {
+		if errors.Is(err, ErrEvidenceNotFound) {
+			writeError(w, http.StatusNotFound)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(pkg); err != nil {
 		return
 	}
 }

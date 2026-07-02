@@ -35,7 +35,8 @@ func run(ctx context.Context) error {
 	keyStore := postgres.NewTenantAPIKeyStoreFromPool(pool)
 	reader := postgres.NewInteractionReaderFromPool(pool)
 	summary := postgres.NewSummaryReaderFromPool(pool)
-	server := httpapi.NewServer(auth.NewAuthenticator(keyStore, time.Now), reader, summary)
+	evidence := postgres.NewEvidenceReaderFromPool(pool)
+	server := httpapi.NewServer(auth.NewAuthenticator(keyStore, time.Now), reader, summary, evidence)
 
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {

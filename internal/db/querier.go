@@ -27,6 +27,9 @@ type Querier interface {
 	GetEvaluationByInteractionEventID(ctx context.Context, arg GetEvaluationByInteractionEventIDParams) (Evaluation, error)
 	// Export endpoint lookup.
 	GetEvidenceRecordByInteraction(ctx context.Context, arg GetEvidenceRecordByInteractionParams) (EvidenceRecord, error)
+	// Evidence export lookup (issue #3): fetch a single interaction scoped to
+	// its tenant.
+	GetInteractionEventByID(ctx context.Context, arg GetInteractionEventByIDParams) (GetInteractionEventByIDRow, error)
 	GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error)
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
 	InsertEvidenceRecord(ctx context.Context, arg InsertEvidenceRecordParams) (EvidenceRecord, error)

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ricardoalt1515/vigia/internal/auth"
+	"github.com/ricardoalt1515/vigia/internal/ledger"
 )
 
 func TestGetInteractions(t *testing.T) {
@@ -49,7 +51,7 @@ func TestGetInteractions(t *testing.T) {
 		},
 	}
 	summary := &fakeSummaryReader{countByTenant: map[string]int64{"tenant-a": 3}}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary)
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{})
 
 	t.Run("rejects unauthorized credentials before reading interactions", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/interactions", nil)
@@ -142,7 +144,7 @@ func TestGetSummary(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{countByTenant: map[string]int64{"tenant-a": 4, "tenant-b": 1}}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary)
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{})
 
 	t.Run("returns the tenant's out-of-hours count", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/summary", nil)
@@ -233,4 +235,136 @@ func (r *fakeSummaryReader) CountOutOfHours(ctx context.Context, tenantID string
 		return 0, r.err
 	}
 	return r.countByTenant[tenantID], nil
+}
+
+// evidenceKey scopes fakeEvidenceReader lookups by (tenantID, interactionID)
+// so the fake can prove tenant isolation the same way the real
+// RLS-scoped adapter does.
+type evidenceKey struct {
+	tenantID      string
+	interactionID string
+}
+
+type fakeEvidenceReader struct {
+	packages map[evidenceKey]ledger.Package
+	calls    int
+	lastKey  evidenceKey
+}
+
+func (r *fakeEvidenceReader) GetEvidencePackage(ctx context.Context, tenantID, interactionID string) (ledger.Package, error) {
+	r.calls++
+	r.lastKey = evidenceKey{tenantID: tenantID, interactionID: interactionID}
+	pkg, ok := r.packages[evidenceKey{tenantID: tenantID, interactionID: interactionID}]
+	if !ok {
+		return ledger.Package{}, ErrEvidenceNotFound
+	}
+	return pkg, nil
+}
+
+func testEvidencePackage() ledger.Package {
+	results := []ledger.DetectorResult{
+		{Code: "contact-hours", Outcome: "fail", Severity: "high", Rationale: "outside window"},
+	}
+	digest := ledger.ComputeInputsDigest(results)
+	createdAt := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	body := ledger.Body{
+		TenantID:            "tenant-a",
+		InteractionEventID:  "interaction-evidenced",
+		EvaluationID:        "eval-1",
+		Seq:                 1,
+		OverallOutcome:      "fail",
+		PolicyBundleVersion: "",
+		InputsDigest:        digest,
+		CreatedAt:           createdAt,
+	}
+	hash := ledger.Hash(ledger.GenesisPrevHash, body)
+	rec := ledger.EvidenceRecord{ID: "record-1", Body: body, PrevHash: ledger.GenesisPrevHash, Hash: hash}
+	return ledger.BuildPackage(rec,
+		ledger.PackageInteraction{ID: "interaction-evidenced", TenantID: "tenant-a", Channel: "phone", Direction: "outbound", OccurredAt: createdAt.Add(-time.Minute)},
+		ledger.PackageEvaluation{ID: "eval-1", OverallOutcome: "fail", PolicyBundleVersion: "", CreatedAt: createdAt},
+		results,
+	)
+}
+
+func TestGetEvidence(t *testing.T) {
+	fixedTime := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	store := &fakeKeyStore{
+		records: map[string]auth.TenantAPIKey{
+			auth.HashAPIKey("tenant-a-key"): {ID: "key-a", TenantID: "tenant-a", KeyHash: auth.HashAPIKey("tenant-a-key"), Status: auth.StatusActive},
+			auth.HashAPIKey("tenant-b-key"): {ID: "key-b", TenantID: "tenant-b", KeyHash: auth.HashAPIKey("tenant-b-key"), Status: auth.StatusActive},
+		},
+	}
+	pkg := testEvidencePackage()
+	evidence := &fakeEvidenceReader{
+		packages: map[evidenceKey]ledger.Package{
+			{tenantID: "tenant-a", interactionID: "interaction-evidenced"}: pkg,
+		},
+	}
+	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
+	summary := &fakeSummaryReader{}
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, evidence)
+
+	t.Run("evaluated interaction exports and independently verifies", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/interactions/interaction-evidenced/evidence", nil)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var got ledger.Package
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if result := ledger.VerifyPackage(got); !result.OK {
+			t.Fatalf("VerifyPackage(response) OK = false, reason %q, want intact", result.BreakReason)
+		}
+		if evidence.lastKey.tenantID != "tenant-a" {
+			t.Fatalf("tenant id = %q, want tenant-a", evidence.lastKey.tenantID)
+		}
+	})
+
+	t.Run("cross-tenant interaction id returns a generic 404 and leaks nothing", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/interactions/interaction-evidenced/evidence", nil)
+		req.Header.Set("Authorization", "Bearer tenant-b-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+		}
+		if body := rec.Body.String(); strings.Contains(body, "tenant-a") || strings.Contains(body, "outside window") {
+			t.Fatalf("404 body leaked tenant A data: %q", body)
+		}
+	})
+
+	t.Run("unevaluated interaction returns a generic 404 with no fabricated fields", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/interactions/never-evaluated/evidence", nil)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+		}
+	})
+
+	t.Run("rejects unauthorized credentials before reading evidence", func(t *testing.T) {
+		evidence.calls = 0
+		req := httptest.NewRequest(http.MethodGet, "/v1/interactions/interaction-evidenced/evidence", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+		if evidence.calls != 0 {
+			t.Fatalf("evidence reader calls = %d, want 0", evidence.calls)
+		}
+	})
 }

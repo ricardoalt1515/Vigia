@@ -245,7 +245,7 @@ against local Postgres; confirms clean skip under `go test ./... -short`.
 Satisfies: *Evidence Package Export Is Self-Contained and Independently
 Verifiable*, *No Backfill for Pre-Existing Evaluations* (export half).
 
-- [ ] 4.1 [integration] Extend `internal/httpapi/httpapi_test.go`
+- [x] 4.1 [integration] Extend `internal/httpapi/httpapi_test.go`
       (`httptest`, before wiring) with cases: a seeded, evaluated
       interaction → `GET /v1/interactions/{id}/evidence` returns
       interaction + evaluation + detector results + applied versions +
@@ -260,13 +260,13 @@ Verifiable*, *No Backfill for Pre-Existing Evaluations* (export half).
       exists, no evidence row) also returns the same generic
       404/empty shape without fabricating chain-proof fields (*Export
       handles a pre-ledger evaluation without evidence*).
-- [ ] 4.2 Implement `EvidenceReader` port + `ErrEvidenceNotFound` sentinel
+- [x] 4.2 Implement `EvidenceReader` port + `ErrEvidenceNotFound` sentinel
       in `internal/httpapi/httpapi.go`; add `NewServer` constructor arg;
       wire `GET /v1/interactions/{id}/evidence` route; handler:
       authenticate via existing `Authorization`-header tenant auth, call
       `reader.GetEvidencePackage(ctx, tenantID, id)`, map
       `ErrEvidenceNotFound` → 404, other errors → 500, success → JSON.
-- [ ] 4.3 Implement the `EvidenceReader` adapter in
+- [x] 4.3 Implement the `EvidenceReader` adapter in
       `internal/postgres/adapters.go`: one `WithTenantTx` loading
       `GetEvidenceRecordByInteraction`, the interaction, the evaluation,
       and `ListDetectorResultRowsByEvaluation`, then
@@ -274,7 +274,7 @@ Verifiable*, *No Backfill for Pre-Existing Evaluations* (export half).
       evidence record) returns `ErrEvidenceNotFound` — collapsing
       cross-tenant, nonexistent, unevaluated, and pre-ledger cases into
       one indistinguishable 404.
-- [ ] 4.4 Wire the new `EvidenceReader` into `NewServer` in
+- [x] 4.4 Wire the new `EvidenceReader` into `NewServer` in
       `cmd/api/main.go`.
 
 Verification: `go test ./internal/httpapi/... -v` green.
