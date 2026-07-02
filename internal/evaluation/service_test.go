@@ -2,6 +2,7 @@ package evaluation_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -150,6 +151,26 @@ func TestServiceEvaluateInteraction(t *testing.T) {
 		}
 		if len(store.calls[0].DetectorResults) != 2 {
 			t.Fatalf("DetectorResults len = %d, want 2", len(store.calls[0].DetectorResults))
+		}
+	})
+
+	t.Run("no detectors configured returns error without persisting", func(t *testing.T) {
+		store := &fakeEvaluationStore{}
+		svc := evaluation.Service{
+			Detectors: nil,
+			Store:     store,
+		}
+
+		_, err := svc.EvaluateInteraction(context.Background(), evaluation.EvaluateInteractionInput{
+			TenantID:           "tenant-a",
+			InteractionEventID: "interaction-e",
+			Interaction:        interaction,
+		})
+		if !errors.Is(err, evaluation.ErrNoDetectors) {
+			t.Fatalf("err = %v, want ErrNoDetectors", err)
+		}
+		if len(store.calls) != 0 {
+			t.Fatalf("CreateEvaluation calls = %d, want 0 (no fabricated evaluation)", len(store.calls))
 		}
 	})
 

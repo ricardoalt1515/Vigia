@@ -6,10 +6,17 @@ package evaluation
 
 import (
 	"context"
+	"errors"
 
 	"github.com/ricardoalt1515/vigia/internal/core"
 	"github.com/ricardoalt1515/vigia/internal/detection"
 )
+
+// ErrNoDetectors is returned by EvaluateInteraction when the Service has no
+// configured detectors. An evaluation with zero detector result rows would
+// fabricate a "pass" outcome with no supporting evidence, so this case is
+// rejected instead of persisted.
+var ErrNoDetectors = errors.New("evaluation: no detectors configured")
 
 // NamedDetector pairs a Detector with the stable detector_code persisted
 // alongside its result row.
@@ -65,6 +72,10 @@ type Service struct {
 // EvaluateInteraction runs every detector over in.Interaction and persists
 // the resulting evaluation header + detector result rows via s.Store.
 func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteractionInput) (core.Evaluation, error) {
+	if len(s.Detectors) == 0 {
+		return core.Evaluation{}, ErrNoDetectors
+	}
+
 	overallOutcome := "pass"
 	results := make([]DetectorResultInput, 0, len(s.Detectors))
 

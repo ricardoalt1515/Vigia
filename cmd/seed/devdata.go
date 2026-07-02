@@ -23,6 +23,7 @@ type SeedQuerier interface {
 	CreateDebtor(ctx context.Context, arg vigiaDB.CreateDebtorParams) (vigiaDB.CreateDebtorRow, error)
 	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.ListInteractionEventsByTenantRow, error)
 	CreateInteractionEvent(ctx context.Context, arg vigiaDB.CreateInteractionEventParams) (vigiaDB.CreateInteractionEventRow, error)
+	GetEvaluationByInteractionEventID(ctx context.Context, arg vigiaDB.GetEvaluationByInteractionEventIDParams) (vigiaDB.Evaluation, error)
 }
 
 // KeyIssuer mints a tenant API key and returns the plaintext key once.
@@ -136,7 +137,9 @@ func afterHoursInstant(now time.Time, debtorLoc *time.Location) time.Time {
 //
 // FK ordering: tenant → debtor → interaction_events → API key.
 //
-// Only newly created interactions are evaluated: re-running the seed against
+// Every fixture ends up evaluated: newly created interactions are evaluated
+// immediately, and pre-existing ones (from a prior seed run) are backfilled
+// if they don't already have an evaluation row. Re-running the seed against
 // already-seeded data must not create duplicate evaluations rows.
 func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator Evaluator, p DevDataParams) (DevDataResult, error) {
 	var result DevDataResult
@@ -214,10 +217,10 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 		return DevDataResult{}, fmt.Errorf("list interaction events: %w", err)
 	}
 
-	existingByRef := make(map[string]string, len(existingEvents)) // transcript_ref -> id string
+	existingByRef := make(map[string]pgtype.UUID, len(existingEvents)) // transcript_ref -> id
 	for _, e := range existingEvents {
 		if e.TranscriptRef != nil {
-			existingByRef[*e.TranscriptRef] = uuidToString(e.ID)
+			existingByRef[*e.TranscriptRef] = e.ID
 		}
 	}
 
@@ -225,7 +228,31 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 	interactionIDs := make([]string, 0, len(fixtures))
 	for _, fix := range fixtures {
 		if id, alreadyExists := existingByRef[fix.transcriptRef]; alreadyExists {
-			interactionIDs = append(interactionIDs, id)
+			interactionIDs = append(interactionIDs, uuidToString(id))
+
+			// Backfill: a pre-existing interaction (e.g. from a prior seed
+			// run) may not have been evaluated yet. Evaluate it now instead
+			// of leaving it permanently unevaluated; the (tenant_id,
+			// interaction_event_id) UNIQUE constraint plus this existence
+			// check keeps a re-run idempotent.
+			if _, err := q.GetEvaluationByInteractionEventID(ctx, vigiaDB.GetEvaluationByInteractionEventIDParams{
+				TenantID:           tenant.ID,
+				InteractionEventID: id,
+			}); err != nil {
+				if !isNotFound(err) {
+					return DevDataResult{}, fmt.Errorf("get evaluation for interaction event %s: %w", fix.transcriptRef, err)
+				}
+				if _, err := evaluator.EvaluateInteraction(ctx, evaluation.EvaluateInteractionInput{
+					TenantID:           result.TenantID,
+					InteractionEventID: uuidToString(id),
+					Interaction: detection.Interaction{
+						OccurredAt:     fix.occurredAt,
+						DebtorTimezone: debtorTimezone,
+					},
+				}); err != nil {
+					return DevDataResult{}, fmt.Errorf("backfill evaluate interaction event %s: %w", fix.transcriptRef, err)
+				}
+			}
 			continue
 		}
 		ref := fix.transcriptRef
@@ -249,8 +276,7 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 		interactionIDs = append(interactionIDs, interactionID)
 		result.Created.InteractionsCreated++
 
-		// Evaluate only newly created interactions: re-running the seed
-		// against already-seeded data must not create duplicate evaluations.
+		// Evaluate newly created interactions immediately.
 		if _, err := evaluator.EvaluateInteraction(ctx, evaluation.EvaluateInteractionInput{
 			TenantID:           result.TenantID,
 			InteractionEventID: interactionID,

@@ -47,3 +47,30 @@ func (q *Queries) CreateEvaluation(ctx context.Context, arg CreateEvaluationPara
 	)
 	return i, err
 }
+
+const getEvaluationByInteractionEventID = `-- name: GetEvaluationByInteractionEventID :one
+SELECT id, tenant_id, interaction_event_id, overall_outcome, policy_bundle_version, created_at
+FROM evaluations
+WHERE tenant_id = $1 AND interaction_event_id = $2
+`
+
+type GetEvaluationByInteractionEventIDParams struct {
+	TenantID           pgtype.UUID `json:"tenant_id"`
+	InteractionEventID pgtype.UUID `json:"interaction_event_id"`
+}
+
+// Used by cmd/seed to detect whether a pre-existing (re-run) interaction
+// still needs to be backfilled with an evaluation.
+func (q *Queries) GetEvaluationByInteractionEventID(ctx context.Context, arg GetEvaluationByInteractionEventIDParams) (Evaluation, error) {
+	row := q.db.QueryRow(ctx, getEvaluationByInteractionEventID, arg.TenantID, arg.InteractionEventID)
+	var i Evaluation
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.InteractionEventID,
+		&i.OverallOutcome,
+		&i.PolicyBundleVersion,
+		&i.CreatedAt,
+	)
+	return i, err
+}

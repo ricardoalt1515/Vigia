@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -123,6 +124,7 @@ func outcomeToAPI(overallOutcome *string) *string {
 	case "fail":
 		upper = "BLOCK"
 	default:
+		log.Printf("postgres: outcomeToAPI: unexpected overall_outcome %q, returning nil", *overallOutcome)
 		return nil
 	}
 	return &upper

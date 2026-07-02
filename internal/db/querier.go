@@ -22,6 +22,9 @@ type Querier interface {
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
 	CreateTenantAPIKey(ctx context.Context, arg CreateTenantAPIKeyParams) (TenantApiKey, error)
 	GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantParams) (GetDebtorByTenantRow, error)
+	// Used by cmd/seed to detect whether a pre-existing (re-run) interaction
+	// still needs to be backfilled with an evaluation.
+	GetEvaluationByInteractionEventID(ctx context.Context, arg GetEvaluationByInteractionEventIDParams) (Evaluation, error)
 	GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error)
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
 	ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsRow, error)

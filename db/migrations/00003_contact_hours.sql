@@ -20,9 +20,19 @@ CREATE TABLE evaluations (
     policy_bundle_version text NOT NULL DEFAULT '',
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (id, tenant_id),
+    -- At most one evaluation per interaction (synchronous, single-shot
+    -- evaluation for this change): also backs ListCurrentTenantInteractionsWithOutcome's
+    -- LEFT JOIN and CountOutOfHoursEvaluations' assumption of no fan-out.
+    UNIQUE (tenant_id, interaction_event_id),
     FOREIGN KEY (interaction_event_id, tenant_id)
         REFERENCES interaction_events(id, tenant_id) ON DELETE CASCADE
 );
+
+-- The UNIQUE (tenant_id, interaction_event_id) constraint above only backs
+-- lookups that lead with tenant_id. The join predicate in
+-- ListCurrentTenantInteractionsWithOutcome (e.interaction_event_id = ie.id)
+-- leads with interaction_event_id alone, so a dedicated index is needed.
+CREATE INDEX idx_evaluations_interaction_event_id ON evaluations (interaction_event_id);
 
 ALTER TABLE evaluations ENABLE ROW LEVEL SECURITY;
 CREATE POLICY evaluations_tenant_isolation ON evaluations
@@ -34,12 +44,17 @@ ALTER TABLE detector_result_rows
     ADD CONSTRAINT detector_result_rows_evaluation_id_fkey
     FOREIGN KEY (evaluation_id, tenant_id)
     REFERENCES evaluations(id, tenant_id) ON DELETE CASCADE;
+-- Composite FK does not auto-index; dr.evaluation_id = e.id join predicate
+-- in ListCurrentTenantInteractionsWithOutcome needs this.
+CREATE INDEX idx_detector_result_rows_evaluation_id ON detector_result_rows (evaluation_id);
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
+DROP INDEX IF EXISTS idx_detector_result_rows_evaluation_id;
 ALTER TABLE detector_result_rows DROP CONSTRAINT IF EXISTS detector_result_rows_evaluation_id_fkey;
 ALTER TABLE detector_result_rows DROP COLUMN IF EXISTS evaluation_id;
+DROP INDEX IF EXISTS idx_evaluations_interaction_event_id;
 DROP TABLE IF EXISTS evaluations;
 ALTER TABLE interaction_events DROP COLUMN IF EXISTS debtor_timezone;
 ALTER TABLE debtors DROP COLUMN IF EXISTS timezone;
