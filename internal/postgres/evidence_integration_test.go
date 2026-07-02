@@ -560,7 +560,11 @@ func tamperEvidenceRecordBypassingTrigger(t *testing.T, ctx context.Context, poo
 		t.Fatalf("disable trigger: %v", err)
 	}
 	defer func() {
-		if _, err := conn.Exec(ctx, `ALTER TABLE evidence_records ENABLE TRIGGER evidence_records_no_update_delete`); err != nil {
+		// Restore with ENABLE ALWAYS (not plain ENABLE): the migration created
+		// this trigger as ENABLE ALWAYS so it fires under session_replication_role
+		// = replica. A plain ENABLE would silently downgrade it to ORIGIN and
+		// leak that weakened state into other tests sharing this database.
+		if _, err := conn.Exec(ctx, `ALTER TABLE evidence_records ENABLE ALWAYS TRIGGER evidence_records_no_update_delete`); err != nil {
 			t.Fatalf("re-enable trigger: %v", err)
 		}
 	}()
