@@ -39,6 +39,18 @@ type PackageRecord struct {
 
 // Package is the self-contained evidence export DTO for one interaction.
 // VerifyPackage re-verifies it with no database access.
+//
+// Trust boundary: the trust-bearing fields are the Record block (hash chain
+// integrity), DetectorResults (recomputed into InputsDigest and compared
+// against Record.InputsDigest), and the identity/outcome fields on
+// Evaluation and Interaction that are cross-checked against Record
+// (ID, OverallOutcome, PolicyBundleVersion for Evaluation; ID, TenantID for
+// Interaction). The remaining Interaction fields (Channel, Direction,
+// OccurredAt) and Evaluation.CreatedAt are informational display-only
+// fields: they are neither hash-contributing nor cross-checked against any
+// server-side value, so VerifyPackage cannot and does not detect tampering
+// of those specific fields. They are included for readability of the export
+// only.
 type Package struct {
 	SchemaVersion   string             `json:"schema_version"`
 	Interaction     PackageInteraction `json:"interaction"`
@@ -116,6 +128,10 @@ func VerifyPackage(pkg Package) VerifyResult {
 		PolicyBundleVersion: pkg.Record.PolicyBundleVersion,
 		InputsDigest:        pkg.Record.InputsDigest,
 		CreatedAt:           createdAt,
+	}
+
+	if !isValidPrevHash(pkg.Record.PrevHash) {
+		return VerifyResult{OK: false, Count: 1, BreakAtSeq: pkg.Record.Seq, BreakReason: "invalid prev_hash format"}
 	}
 
 	if Hash(pkg.Record.PrevHash, body) != pkg.Record.Hash {

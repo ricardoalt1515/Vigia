@@ -1,6 +1,7 @@
 package ledger_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -156,6 +157,23 @@ func TestVerifyPackageDetectsTampering(t *testing.T) {
 			name:       "tampered record evaluation_id",
 			tamper:     func(p *ledger.Package) { p.Record.EvaluationID = "eval-2" },
 			wantReason: "evaluation id mismatch",
+		},
+		{
+			name:       "garbage record prev_hash",
+			tamper:     func(p *ledger.Package) { p.Record.PrevHash = "not-hex" },
+			wantReason: "invalid prev_hash format",
+		},
+		{
+			name: "valid-format but wrong record prev_hash",
+			tamper: func(p *ledger.Package) {
+				p.Record.PrevHash = strings.Repeat("a", 64)
+			},
+			wantReason: "hash mismatch",
+		},
+		{
+			name:       "tampered record created_at",
+			tamper:     func(p *ledger.Package) { p.Record.CreatedAt = "2026-06-21T10:00:00.000000Z" },
+			wantReason: "hash mismatch",
 		},
 	}
 

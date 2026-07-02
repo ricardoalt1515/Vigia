@@ -7,7 +7,7 @@ type VerifyResult struct {
 	Count       int
 	BreakAtSeq  int64  // seq found at the break point (see ExpectedSeq for the seq that should have been there); 0 when OK
 	ExpectedSeq int64  // seq VerifyChain expected at the break point (previous record's seq + 1, or 1 for the first record); 0 when OK
-	BreakReason string // "" | "genesis prev_hash" | "seq gap" | "prev_hash linkage" | "hash mismatch" | "inputs_digest mismatch" | "evaluation id mismatch" | "evaluation overall_outcome mismatch" | "evaluation policy_bundle_version mismatch" | "interaction id mismatch" | "interaction tenant_id mismatch"
+	BreakReason string // "" | "genesis prev_hash" | "seq gap" | "prev_hash linkage" | "hash mismatch" | "inputs_digest mismatch" | "evaluation id mismatch" | "evaluation overall_outcome mismatch" | "evaluation policy_bundle_version mismatch" | "interaction id mismatch" | "interaction tenant_id mismatch" | "invalid prev_hash format"
 }
 
 // VerifyChain replays records that MUST already be ordered by Seq ascending.

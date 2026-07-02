@@ -346,11 +346,19 @@ piece → `ErrEvidenceNotFound`.
 }
 ```
 
-`VerifyPackage` consumes exactly this DTO: (1) recompute `inputs_digest` from
-`detector_results`, compare to `record.inputs_digest`; (2) rebuild `Body` from
-`record.*` (parsing `created_at` with `canonicalTimeLayout`) and check
+`VerifyPackage` consumes exactly this DTO: (1) cross-check the `evaluation`/
+`interaction` identity and outcome fields against `record.*`; (2) recompute
+`inputs_digest` from `detector_results`, compare to `record.inputs_digest`;
+(3) rebuild `Body` from `record.*` (parsing `created_at` with
+`canonicalTimeLayout`), validate `record.prev_hash` before use, and check
 `Hash(record.prev_hash, body) == record.hash`. Both `record.*` fields fully
 determine the hash; `detector_results` is the extra layer proving the digest.
+Trust boundary: only the `record` block, `detector_results` (via
+`inputs_digest`), and the cross-checked identity/outcome fields on
+`evaluation`/`interaction` are verified. The remaining display-only fields
+(`interaction.channel`, `interaction.direction`, `interaction.occurred_at`,
+`evaluation.created_at`) are informational and not covered by verification —
+they have no server-side hashed counterpart to cross-check against.
 
 **404 uniformity:** RLS scopes the read to the caller's tenant, so a
 cross-tenant `id` returns no rows — **indistinguishable** from a nonexistent
