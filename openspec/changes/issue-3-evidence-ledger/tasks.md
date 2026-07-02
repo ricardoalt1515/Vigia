@@ -287,13 +287,13 @@ Satisfies: *VerifyChain Detects the First Break* (operator surface),
 *Seed Produces Evidence Records for Demo Data* (`[manual-demo]` verify
 scenario).
 
-- [ ] 5.1 [unit] Write `cmd/ledger-verify/main_test.go` before
+- [x] 5.1 [unit] Write `cmd/ledger-verify/main_test.go` before
       `main.go` exists, following `cmd/seed`'s testable `run(ctx, args,
       store)` seam style with a fake store implementing the
       store-backed-`VerifyChain` interface: intact chain → exit code 0 and
       an "intact" line; broken chain → exit code 1 and a line naming the
       first-break `seq` + reason; missing `-tenant-id` flag → exit code 2.
-- [ ] 5.2 Implement `cmd/ledger-verify/main.go`: `-tenant-id` flag
+- [x] 5.2 Implement `cmd/ledger-verify/main.go`: `-tenant-id` flag
       (required, UUID), `run(ctx, args, store) int` seam, wiring
       `config.LoadFromEnv()` + a real Postgres pool in `main()`, using the
       Work Unit 3 store-backed `VerifyChain` adapter. Output format and
