@@ -208,7 +208,14 @@ func TestRestrictedAppRoleIsLeastPrivilege(t *testing.T) {
 		t.Fatalf("vigia_app owns %d public tables, want 0", ownedTables)
 	}
 
-	for _, table := range []string{"tenant_api_keys", "interaction_events", "evaluations", "detector_result_rows"} {
+	for _, table := range []string{
+		"tenant_api_keys",
+		"interaction_events",
+		"evaluations",
+		"detector_result_rows",
+		"evidence_records",
+		"ledger_chain_heads",
+	} {
 		t.Run(table, func(t *testing.T) {
 			var canSelect bool
 			if err := db.QueryRowContext(ctx, `select has_table_privilege('vigia_app', 'public.' || $1, 'SELECT')`, table).Scan(&canSelect); err != nil {

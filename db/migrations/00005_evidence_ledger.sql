@@ -40,6 +40,12 @@ CREATE TABLE ledger_chain_heads (
 ALTER TABLE ledger_chain_heads ENABLE ROW LEVEL SECURITY;
 CREATE POLICY ledger_chain_heads_tenant_isolation ON ledger_chain_heads
     USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+-- The restricted runtime role is provisioned by 00004_restricted_app_role.sql.
+-- Issue #3 adds new tenant-scoped tables, so their read grants live with the
+-- migration that creates them.
+GRANT SELECT ON evidence_records TO vigia_app;
+GRANT SELECT ON ledger_chain_heads TO vigia_app;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -79,6 +85,8 @@ ALTER TABLE evidence_records ENABLE ALWAYS TRIGGER evidence_records_no_truncate;
 
 -- +goose Down
 -- +goose StatementBegin
+REVOKE SELECT ON ledger_chain_heads FROM vigia_app;
+REVOKE SELECT ON evidence_records FROM vigia_app;
 DROP TRIGGER IF EXISTS evidence_records_no_truncate ON evidence_records;
 DROP TRIGGER IF EXISTS evidence_records_no_update_delete ON evidence_records;
 DROP FUNCTION IF EXISTS evidence_records_block_mutation();

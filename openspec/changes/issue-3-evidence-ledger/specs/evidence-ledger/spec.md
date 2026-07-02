@@ -312,7 +312,7 @@ empty shape — never a fabricated package.
 
 ## Requirement: No Backfill for Pre-Existing Evaluations
 
-Evaluations created before migration `00004_evidence_ledger.sql` deploys
+Evaluations created before migration `00005_evidence_ledger.sql` deploys
 MUST NOT receive a retroactively fabricated `EvidenceRecord`. The chain for
 each tenant begins with the first evaluation created after deployment.
 `VerifyChain` and the export endpoint MUST handle interactions whose
@@ -322,7 +322,7 @@ fabricating a record.
 ### Scenario: Pre-migration evaluation has no evidence record `[integration]`
 
 - GIVEN an `evaluations` row exists that was created before migration
-  `00004_evidence_ledger.sql` was applied (simulated via direct insert
+  `00005_evidence_ledger.sql` was applied (simulated via direct insert
   bypassing the ledger append path)
 - WHEN `evidence_records` is queried for that evaluation's id
 - THEN no matching row MUST exist.

@@ -18,7 +18,7 @@ the spec's testing-mode annotations. Genesis sentinel is the empty string
 Satisfies: *Evidence Records Are Write-Once* (schema half), foundational
 tables for all later units.
 
-- [x] 1.1 Write `db/migrations/00004_evidence_ledger.sql` (Up + Down)
+- [x] 1.1 Write `db/migrations/00005_evidence_ledger.sql` (Up + Down)
       exactly per design.md §Migration:
       - `evidence_records` table: `id`, `tenant_id` FK `tenants(id)
         ON DELETE CASCADE`, `interaction_event_id`, `evaluation_id`, `seq

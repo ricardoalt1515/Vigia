@@ -99,7 +99,7 @@ table-driven and integration tests.
 
 ### In scope
 
-- Migration `00004_evidence_ledger.sql`:
+- Migration `00005_evidence_ledger.sql`:
   - `evidence_records` table (tenant-scoped, RLS tenant-isolation policy matching
     the existing `nullif(current_setting('app.tenant_id', true), '')::uuid`
     pattern), composite FKs to `interaction_events(id, tenant_id)` and
@@ -314,7 +314,7 @@ trust core. *(Flagged decision — resolved: no backfill, explicit.)*
   tenant-isolation policies matching the existing pattern; all reads/writes flow
   through `tenantdb.WithTenantTx`.
 - **SQL-first persistence:** schema lands as goose migration
-  `00004_evidence_ledger.sql`; sqlc regenerates access code. No ORM.
+  `00005_evidence_ledger.sql`; sqlc regenerates access code. No ORM.
 - **Schema fidelity:** the `EvidenceRecord` is re-derived from the **real**
   `evaluations`/`detector_result_rows` schema, not the aspirational
   `technical-design.md` struct (no judge/HITL/per-rule-score fields).
@@ -335,7 +335,7 @@ trust core. *(Flagged decision — resolved: no backfill, explicit.)*
 
 ## Rollback
 
-- Roll back migration `00004_evidence_ledger.sql` via `make migrate-down` (drops
+- Roll back migration `00005_evidence_ledger.sql` via `make migrate-down` (drops
   the trigger, `evidence_records`, and `ledger_chain_heads`).
 - Delete `internal/ledger` implementation and the append call added to
   `EvaluationStore.CreateEvaluation` (revert to the #2 header + detector-rows

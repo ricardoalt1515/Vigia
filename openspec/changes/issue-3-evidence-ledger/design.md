@@ -8,7 +8,7 @@ verification behind a tiny, **pure** interface (`Hash`, `ComputeInputsDigest`,
 `internal/postgres`: `EvaluationStore.CreateEvaluation` appends exactly one
 `evidence_records` row **inside its existing `tenantdb.WithTenantTx`**, serialized per
 tenant through a locked `ledger_chain_heads` head row (Decision 2). A migration
-`00004_evidence_ledger.sql` adds the two tables and a `BEFORE UPDATE OR DELETE` trigger
+`00005_evidence_ledger.sql` adds the two tables and a `BEFORE UPDATE OR DELETE` trigger
 that makes records write-once regardless of role (Decision 3). A new tenant-scoped
 `GET /v1/interactions/{id}/evidence` endpoint exports a self-contained evidence package
 that `VerifyPackage` re-verifies with no DB access (Decision 5). A thin
@@ -145,7 +145,7 @@ Argument/shape failures (nil package, malformed record) return a wrapped
 determinism, ordering invariant, and self-verification logic reappear scattered
 across the adapter, handler, and CLI. It earns its keep.
 
-## Migration — `db/migrations/00004_evidence_ledger.sql`
+## Migration — `db/migrations/00005_evidence_ledger.sql`
 
 ```sql
 -- +goose Up
@@ -408,7 +408,7 @@ exercisable against seed data.
 
 | File | Action |
 |---|---|
-| `db/migrations/00004_evidence_ledger.sql` | Create (tables, RLS, trigger, Down) |
+| `db/migrations/00005_evidence_ledger.sql` | Create (tables, RLS, trigger, Down) |
 | `db/queries/evidence_records.sql` | Create (Lock/Insert/List/Get + detector-by-eval) |
 | `db/queries/ledger_chain_heads.sql` | Create (or fold into evidence_records.sql) |
 | `internal/db/*` | Regenerate via sqlc (`make sqlc`) |

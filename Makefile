@@ -49,7 +49,7 @@ test-db: ## run all tests with local Postgres URLs exported
 	DATABASE_URL="$(DATABASE_URL)" APP_DATABASE_URL="$(APP_DATABASE_URL)" go test ./...
 
 test-rls: ## run database-backed RLS isolation tests through the restricted app role
-	DATABASE_URL="$(DATABASE_URL)" APP_DATABASE_URL="$(APP_DATABASE_URL)" go test ./internal/db ./internal/postgres -run 'TestRestrictedAppRoleIsLeastPrivilege|TestRLSIsolationForCurrentTenantInteractions|TestEvaluationRLSIsolationAcrossTenants' -count=1
+	DATABASE_URL="$(DATABASE_URL)" APP_DATABASE_URL="$(APP_DATABASE_URL)" go test ./internal/db ./internal/postgres -run 'TestRestrictedAppRoleIsLeastPrivilege|TestRLSIsolationForCurrentTenantInteractions|TestEvaluationRLSIsolationAcrossTenants|TestEvidenceRLSIsolationAcrossTenants' -count=1
 
 tidy:
 	go mod tidy
