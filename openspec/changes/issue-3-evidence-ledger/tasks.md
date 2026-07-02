@@ -18,7 +18,7 @@ the spec's testing-mode annotations. Genesis sentinel is the empty string
 Satisfies: *Evidence Records Are Write-Once* (schema half), foundational
 tables for all later units.
 
-- [ ] 1.1 Write `db/migrations/00004_evidence_ledger.sql` (Up + Down)
+- [x] 1.1 Write `db/migrations/00004_evidence_ledger.sql` (Up + Down)
       exactly per design.md §Migration:
       - `evidence_records` table: `id`, `tenant_id` FK `tenants(id)
         ON DELETE CASCADE`, `interaction_event_id`, `evaluation_id`, `seq
@@ -42,32 +42,32 @@ tables for all later units.
         `ERRCODE = 'restrict_violation'`
       - `evidence_records_no_update_delete` trigger wiring the function
       - Down: drop trigger, drop function, drop both tables
-- [ ] 1.2 Run `make migrate-up` against local Postgres; verify no errors
+- [x] 1.2 Run `make migrate-up` against local Postgres; verify no errors
       and that existing issue #1/#2 seed/tests still pass against the
       migrated schema.
-- [ ] 1.3 Create `db/queries/evidence_records.sql`:
+- [x] 1.3 Create `db/queries/evidence_records.sql`:
       `InsertEvidenceRecord :one`, `ListEvidenceRecordsByTenant :many`
       (ordered by `seq ASC`), `GetEvidenceRecordByInteraction :one`,
       `ListDetectorResultRowsByEvaluation :many` (ordered by
       `detector_code ASC`). **No UPDATE or DELETE query targeting
       `evidence_records` MUST exist in this file or anywhere else in the
       repo** — this is the app-layer half of write-once.
-- [ ] 1.4 Create `db/queries/ledger_chain_heads.sql`: `LockChainHead :one`
+- [x] 1.4 Create `db/queries/ledger_chain_heads.sql`: `LockChainHead :one`
       (`INSERT ... ON CONFLICT (tenant_id) DO UPDATE SET last_seq =
       ledger_chain_heads.last_seq RETURNING last_seq, last_hash`),
       `UpdateChainHead :exec`.
-- [ ] 1.5 Run sqlc regeneration (`sqlc generate` / repo's generate target,
+- [x] 1.5 Run sqlc regeneration (`sqlc generate` / repo's generate target,
       e.g. `make sqlc`) to produce generated code for both new query
       files under `internal/db`. Verify `go build ./...` succeeds with the
       new generated types (`InsertEvidenceRecordParams`,
       `LockChainHeadRow`, etc.).
-- [ ] 1.6 [unit] Write a grep-based repo test (or extend an existing
+- [x] 1.6 [unit] Write a grep-based repo test (or extend an existing
       static-check test, e.g. `internal/db/no_mutation_test.go`) asserting
       no `UPDATE evidence_records` / `DELETE FROM evidence_records`
       substring exists anywhere under `db/queries/` or generated
       `internal/db/*.sql.go`. Satisfies *Application layer exposes no
       update or delete path* `[unit]`.
-- [ ] 1.7 Extend the migration/RLS catalog test (mirrors
+- [x] 1.7 Extend the migration/RLS catalog test (mirrors
       `internal/db/migration_test.go` pattern) to assert `evidence_records`
       and `ledger_chain_heads` both appear with a non-null `tenant_id`
       column and RLS enabled.

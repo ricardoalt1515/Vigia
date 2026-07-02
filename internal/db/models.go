@@ -90,6 +90,20 @@ type Evaluation struct {
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
+type EvidenceRecord struct {
+	ID                  pgtype.UUID        `json:"id"`
+	TenantID            pgtype.UUID        `json:"tenant_id"`
+	InteractionEventID  pgtype.UUID        `json:"interaction_event_id"`
+	EvaluationID        pgtype.UUID        `json:"evaluation_id"`
+	Seq                 int64              `json:"seq"`
+	PrevHash            string             `json:"prev_hash"`
+	Hash                string             `json:"hash"`
+	OverallOutcome      string             `json:"overall_outcome"`
+	PolicyBundleVersion string             `json:"policy_bundle_version"`
+	InputsDigest        string             `json:"inputs_digest"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
 type InteractionEvent struct {
 	ID             pgtype.UUID        `json:"id"`
 	TenantID       pgtype.UUID        `json:"tenant_id"`
@@ -101,6 +115,12 @@ type InteractionEvent struct {
 	TranscriptRef  *string            `json:"transcript_ref"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	DebtorTimezone string             `json:"debtor_timezone"`
+}
+
+type LedgerChainHead struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	LastSeq  int64       `json:"last_seq"`
+	LastHash string      `json:"last_hash"`
 }
 
 type PolicyBundle struct {

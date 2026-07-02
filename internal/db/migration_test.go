@@ -19,6 +19,8 @@ var tenantScopedTables = []string{
 	"policy_bundles",
 	"policy_bundle_rules",
 	"detector_result_rows",
+	"evidence_records",
+	"ledger_chain_heads",
 }
 
 func TestMigrationPreservesTenantScopedParentChildIntegrity(t *testing.T) {
