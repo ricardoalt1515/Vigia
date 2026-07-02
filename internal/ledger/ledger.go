@@ -94,11 +94,42 @@ func canonicalBody(b Body) []byte {
 }
 
 // Hash = hex(sha256(prevHash-ASCII bytes || canonicalBody(body))). Pure.
+//
+// Concatenating prevHash and canonicalBody(body) directly (with no
+// separator or length prefix) is unambiguous ONLY because of two invariants
+// enforced below: prevHash is always either "" (GenesisPrevHash) or exactly
+// 64 lowercase hex characters, and canonicalBody(body) always starts with
+// '{' (a JSON object). Since neither '{' nor any hex digit can be produced
+// by the other, no two distinct (prevHash, body) pairs can ever concatenate
+// to the same byte string. If prevHash were allowed to be arbitrary bytes,
+// this concatenation would become ambiguous (e.g. prevHash="ab" + body="c"
+// == prevHash="a" + body="bc"), silently weakening the hash chain.
 func Hash(prevHash string, body Body) string {
+	if !isValidPrevHash(prevHash) {
+		panic("ledger: Hash: prevHash must be \"\" (genesis) or 64 lowercase hex characters, got: " + prevHash)
+	}
 	sum := sha256.New()
 	sum.Write([]byte(prevHash))
 	sum.Write(canonicalBody(body))
 	return hex.EncodeToString(sum.Sum(nil))
+}
+
+// isValidPrevHash reports whether prevHash is a value that preserves the
+// concatenation invariant documented on Hash: the empty genesis sentinel, or
+// exactly 64 lowercase hex characters (a sha256 hex digest).
+func isValidPrevHash(prevHash string) bool {
+	if prevHash == GenesisPrevHash {
+		return true
+	}
+	if len(prevHash) != 64 {
+		return false
+	}
+	for _, c := range prevHash {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // canonicalDetectorResult mirrors DetectorResult for deterministic

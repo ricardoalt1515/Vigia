@@ -111,9 +111,11 @@ func VerifyChain(records []EvidenceRecord) VerifyResult
 func BuildPackage(rec EvidenceRecord, interaction PackageInteraction,
     eval PackageEvaluation, results []DetectorResult) Package
 
-// VerifyPackage re-verifies an export with NO DB access: recomputes
-// inputs_digest from the package's detector_results and the record hash from
-// prev_hash || canonical(body), comparing both against the embedded values.
+// VerifyPackage re-verifies an export with NO DB access: cross-validates the
+// Evaluation/Interaction display blocks against the verified Record, then
+// recomputes inputs_digest from the package's detector_results and the
+// record hash from prev_hash || canonical(body), comparing both against the
+// embedded values.
 func VerifyPackage(pkg Package) VerifyResult
 
 type VerifyResult struct {

@@ -58,8 +58,28 @@ CREATE TRIGGER evidence_records_no_update_delete
     FOR EACH ROW EXECUTE FUNCTION evidence_records_block_mutation();
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+CREATE TRIGGER evidence_records_no_truncate
+    BEFORE TRUNCATE ON evidence_records
+    FOR EACH STATEMENT EXECUTE FUNCTION evidence_records_block_mutation();
+-- +goose StatementEnd
+
+-- Default trigger firing (ENABLE ORIGIN) is bypassed by
+-- `SET session_replication_role = replica` (used by logical replication /
+-- restore tooling). ENABLE ALWAYS makes both triggers fire regardless of
+-- session_replication_role, so the write-once/no-truncate guarantee holds
+-- even under replica-mode sessions.
+-- +goose StatementBegin
+ALTER TABLE evidence_records ENABLE ALWAYS TRIGGER evidence_records_no_update_delete;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+ALTER TABLE evidence_records ENABLE ALWAYS TRIGGER evidence_records_no_truncate;
+-- +goose StatementEnd
+
 -- +goose Down
 -- +goose StatementBegin
+DROP TRIGGER IF EXISTS evidence_records_no_truncate ON evidence_records;
 DROP TRIGGER IF EXISTS evidence_records_no_update_delete ON evidence_records;
 DROP FUNCTION IF EXISTS evidence_records_block_mutation();
 DROP TABLE IF EXISTS evidence_records;

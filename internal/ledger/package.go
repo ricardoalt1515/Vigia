@@ -72,11 +72,31 @@ func BuildPackage(rec EvidenceRecord, interaction PackageInteraction, eval Packa
 	}
 }
 
-// VerifyPackage re-verifies an export with NO DB access: recomputes
-// inputs_digest from the package's detector_results and the record hash
-// from prev_hash || canonical(body), comparing both against the embedded
-// values.
+// VerifyPackage re-verifies an export with NO DB access. It cross-validates
+// the display blocks (Evaluation, Interaction) against the verified Record
+// before recomputing inputs_digest from detector_results and the record hash
+// from prev_hash || canonical(body). Evaluation and Interaction carry
+// independently mutable copies of identity/outcome fields that are NOT
+// covered by the hash or inputs_digest recomputation, so a tampered display
+// block must be caught here or VerifyPackage would report OK on a
+// self-contradictory package.
 func VerifyPackage(pkg Package) VerifyResult {
+	if pkg.Evaluation.ID != pkg.Record.EvaluationID {
+		return VerifyResult{OK: false, Count: 1, BreakAtSeq: pkg.Record.Seq, BreakReason: "evaluation id mismatch"}
+	}
+	if pkg.Evaluation.OverallOutcome != pkg.Record.OverallOutcome {
+		return VerifyResult{OK: false, Count: 1, BreakAtSeq: pkg.Record.Seq, BreakReason: "evaluation overall_outcome mismatch"}
+	}
+	if pkg.Evaluation.PolicyBundleVersion != pkg.Record.PolicyBundleVersion {
+		return VerifyResult{OK: false, Count: 1, BreakAtSeq: pkg.Record.Seq, BreakReason: "evaluation policy_bundle_version mismatch"}
+	}
+	if pkg.Interaction.ID != pkg.Record.InteractionEventID {
+		return VerifyResult{OK: false, Count: 1, BreakAtSeq: pkg.Record.Seq, BreakReason: "interaction id mismatch"}
+	}
+	if pkg.Interaction.TenantID != pkg.Record.TenantID {
+		return VerifyResult{OK: false, Count: 1, BreakAtSeq: pkg.Record.Seq, BreakReason: "interaction tenant_id mismatch"}
+	}
+
 	recomputedDigest := ComputeInputsDigest(pkg.DetectorResults)
 	if recomputedDigest != pkg.Record.InputsDigest {
 		return VerifyResult{OK: false, Count: 1, BreakAtSeq: pkg.Record.Seq, BreakReason: "inputs_digest mismatch"}

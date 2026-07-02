@@ -115,6 +115,15 @@ func TestVerifyChainDetectsTampering(t *testing.T) {
 			wantBreakAt: 1,
 			wantReason:  "genesis prev_hash",
 		},
+		{
+			name: "tampered seq on record 0 breaks genesis seq invariant",
+			tamper: func(rs []ledger.EvidenceRecord) []ledger.EvidenceRecord {
+				rs[0].Body.Seq = 2
+				return rs
+			},
+			wantBreakAt: 2,
+			wantReason:  "seq gap",
+		},
 	}
 
 	for _, tt := range tests {
@@ -134,5 +143,47 @@ func TestVerifyChainDetectsTampering(t *testing.T) {
 				t.Fatalf("BreakReason = %q, want %q", result.BreakReason, tt.wantReason)
 			}
 		})
+	}
+}
+
+// TestVerifyChainExpectedSeqOnFirstRecordTamperedSeq covers the misleading
+// BreakAtSeq case: if the first record's stored Seq is tampered (e.g. to 2),
+// BreakAtSeq alone reports the tampered value with no indication of what was
+// actually expected. ExpectedSeq must report 1 (the genesis seq) regardless
+// of what value was found.
+func TestVerifyChainExpectedSeqOnFirstRecordTamperedSeq(t *testing.T) {
+	records := buildChain(3)
+	records[0].Body.Seq = 2
+
+	result := ledger.VerifyChain(records)
+
+	if result.OK {
+		t.Fatal("VerifyChain() OK = true, want tampering detected")
+	}
+	if result.BreakAtSeq != 2 {
+		t.Fatalf("BreakAtSeq = %d, want 2 (the tampered value found)", result.BreakAtSeq)
+	}
+	if result.ExpectedSeq != 1 {
+		t.Fatalf("ExpectedSeq = %d, want 1 (the genesis seq that should have been there)", result.ExpectedSeq)
+	}
+}
+
+// TestVerifyChainExpectedSeqOnMidChainSeqGap covers ExpectedSeq for a
+// non-genesis seq gap: it must report the previous record's seq + 1, not the
+// tampered/found value.
+func TestVerifyChainExpectedSeqOnMidChainSeqGap(t *testing.T) {
+	records := buildChain(3)
+	tampered := append(records[:1], records[2:]...)
+
+	result := ledger.VerifyChain(tampered)
+
+	if result.OK {
+		t.Fatal("VerifyChain() OK = true, want tampering detected")
+	}
+	if result.BreakAtSeq != 3 {
+		t.Fatalf("BreakAtSeq = %d, want 3 (the value found)", result.BreakAtSeq)
+	}
+	if result.ExpectedSeq != 2 {
+		t.Fatalf("ExpectedSeq = %d, want 2 (previous record's seq + 1)", result.ExpectedSeq)
 	}
 }

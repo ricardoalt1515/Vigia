@@ -42,12 +42,39 @@ func TestHashGoldenValue(t *testing.T) {
 func TestHashIsDeterministic(t *testing.T) {
 	body1 := goldenBody()
 	body2 := goldenBody()
+	const prevHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	h1 := ledger.Hash("some-prev-hash", body1)
-	h2 := ledger.Hash("some-prev-hash", body2)
+	h1 := ledger.Hash(prevHash, body1)
+	h2 := ledger.Hash(prevHash, body2)
 
 	if h1 != h2 {
 		t.Fatalf("Hash() not deterministic: %q != %q", h1, h2)
+	}
+}
+
+// TestHashRejectsInvalidPrevHash pins the defensive validation documented on
+// Hash: prevHash must be the empty genesis sentinel or exactly 64 lowercase
+// hex characters, otherwise the prevHash||canonicalBody concatenation could
+// become ambiguous.
+func TestHashRejectsInvalidPrevHash(t *testing.T) {
+	tests := []struct {
+		name     string
+		prevHash string
+	}{
+		{name: "not hex", prevHash: "not-genesis"},
+		{name: "wrong length", prevHash: "abc123"},
+		{name: "uppercase hex", prevHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("Hash() did not panic on invalid prevHash")
+				}
+			}()
+			ledger.Hash(tt.prevHash, goldenBody())
+		})
 	}
 }
 

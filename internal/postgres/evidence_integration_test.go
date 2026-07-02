@@ -392,6 +392,94 @@ func TestEvidenceRecordsAreWriteOnceAgainstOwnerConnection(t *testing.T) {
 	}
 }
 
+// TestEvidenceRecordsWriteOnceSurvivesSessionReplicationRole covers the gap
+// left by ENABLE ORIGIN (the trigger default): a session that sets
+// session_replication_role = replica (e.g. logical-replication or restore
+// tooling) must still be blocked, because the migration marks both
+// evidence_records triggers ENABLE ALWAYS.
+func TestEvidenceRecordsWriteOnceSurvivesSessionReplicationRole(t *testing.T) {
+	databaseURL := requireDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+
+	tenantID, debtorID := seedTenantAndDebtor(t, ctx, pool, "evid-replica-role")
+	interactionID := seedInteraction(t, ctx, pool, tenantID, debtorID, "evid/replica-role")
+	got := evaluateOnce(t, ctx, pool, tenantID, interactionID)
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire connection: %v", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SET session_replication_role = replica`); err != nil {
+		t.Fatalf("set session_replication_role: %v", err)
+	}
+	defer func() {
+		if _, err := conn.Exec(ctx, `SET session_replication_role = origin`); err != nil {
+			t.Fatalf("reset session_replication_role: %v", err)
+		}
+	}()
+
+	_, err = conn.Exec(ctx, `UPDATE evidence_records SET hash = 'tampered' WHERE evaluation_id = $1`, string(got.ID))
+	if err == nil {
+		t.Fatal("expected UPDATE against evidence_records to fail even under session_replication_role = replica")
+	}
+	if !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("UPDATE error = %v, want append-only exception", err)
+	}
+
+	_, err = conn.Exec(ctx, `DELETE FROM evidence_records WHERE evaluation_id = $1`, string(got.ID))
+	if err == nil {
+		t.Fatal("expected DELETE against evidence_records to fail even under session_replication_role = replica")
+	}
+	if !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("DELETE error = %v, want append-only exception", err)
+	}
+
+	if n := countEvidenceRows(t, ctx, pool, string(got.ID)); n != 1 {
+		t.Fatalf("evidence_records rows after failed UPDATE/DELETE under replica role = %d, want 1 (still exists)", n)
+	}
+}
+
+// TestEvidenceRecordsTruncateBlocked covers the row-trigger blind spot:
+// row-level BEFORE UPDATE OR DELETE triggers never fire on TRUNCATE, so a
+// dedicated statement-level BEFORE TRUNCATE trigger is required to keep the
+// ledger append-only.
+func TestEvidenceRecordsTruncateBlocked(t *testing.T) {
+	databaseURL := requireDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+
+	tenantID, debtorID := seedTenantAndDebtor(t, ctx, pool, "evid-truncate")
+	interactionID := seedInteraction(t, ctx, pool, tenantID, debtorID, "evid/truncate")
+	got := evaluateOnce(t, ctx, pool, tenantID, interactionID)
+
+	_, err = pool.Exec(ctx, `TRUNCATE evidence_records`)
+	if err == nil {
+		t.Fatal("expected TRUNCATE against evidence_records to fail")
+	}
+	if !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("TRUNCATE error = %v, want append-only exception", err)
+	}
+
+	if n := countEvidenceRows(t, ctx, pool, string(got.ID)); n != 1 {
+		t.Fatalf("evidence_records rows after failed TRUNCATE = %d, want 1 (still exists)", n)
+	}
+}
+
 // TestVerifyChainDetectsTamperedFields covers *VerifyChain detects a
 // tampered overall_outcome / inputs_digest / prev_hash / seq* against real
 // Postgres. Because the write-once trigger blocks UPDATE unconditionally

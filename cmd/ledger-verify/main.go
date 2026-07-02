@@ -78,6 +78,6 @@ func run(ctx context.Context, args []string, store ChainVerifier, out io.Writer)
 		return exitIntact
 	}
 
-	fmt.Fprintf(out, "chain BROKEN: tenant=%s first_break_seq=%d reason=%s\n", *tenantID, result.BreakAtSeq, result.BreakReason)
+	fmt.Fprintf(out, "chain BROKEN: tenant=%s first_break_seq=%d expected_seq=%d reason=%s\n", *tenantID, result.BreakAtSeq, result.ExpectedSeq, result.BreakReason)
 	return exitBroken
 }

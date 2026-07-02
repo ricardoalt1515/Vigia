@@ -81,3 +81,97 @@ func TestVerifyPackageDetectsTamperedDetectorResultWithoutDigestUpdate(t *testin
 		t.Fatalf("BreakReason = %q, want %q", result.BreakReason, "inputs_digest mismatch")
 	}
 }
+
+// TestVerifyPackageDetectsTampering covers every cross-checked display-block
+// field (Evaluation/Interaction vs. Record) plus every hash-contributing
+// Record field, mirroring TestVerifyChainDetectsTampering. Evaluation and
+// Interaction carry independently mutable copies that are NOT covered by the
+// inputs_digest or hash recomputation, so a tampered display block must
+// still be caught by VerifyPackage's cross-validation.
+func TestVerifyPackageDetectsTampering(t *testing.T) {
+	tests := []struct {
+		name       string
+		tamper     func(*ledger.Package)
+		wantReason string
+	}{
+		// Cross-checked display-block fields (caught before hash/digest
+		// recomputation runs).
+		{
+			name:       "tampered evaluation id",
+			tamper:     func(p *ledger.Package) { p.Evaluation.ID = "eval-2" },
+			wantReason: "evaluation id mismatch",
+		},
+		{
+			name:       "tampered evaluation overall_outcome",
+			tamper:     func(p *ledger.Package) { p.Evaluation.OverallOutcome = "pass" },
+			wantReason: "evaluation overall_outcome mismatch",
+		},
+		{
+			name:       "tampered evaluation policy_bundle_version",
+			tamper:     func(p *ledger.Package) { p.Evaluation.PolicyBundleVersion = "v2" },
+			wantReason: "evaluation policy_bundle_version mismatch",
+		},
+		{
+			name:       "tampered interaction id",
+			tamper:     func(p *ledger.Package) { p.Interaction.ID = "interaction-2" },
+			wantReason: "interaction id mismatch",
+		},
+		{
+			name:       "tampered interaction tenant_id",
+			tamper:     func(p *ledger.Package) { p.Interaction.TenantID = "tenant-2" },
+			wantReason: "interaction tenant_id mismatch",
+		},
+		// Hash-contributing Record fields. OverallOutcome, PolicyBundleVersion,
+		// InteractionEventID, TenantID, and EvaluationID are also caught by
+		// the cross-checks above (since only the Record side changed, it now
+		// disagrees with the still-original Evaluation/Interaction block).
+		// Seq is not cross-checked, so it falls through to the hash
+		// recomputation, which then reports "hash mismatch".
+		{
+			name:       "tampered record overall_outcome",
+			tamper:     func(p *ledger.Package) { p.Record.OverallOutcome = "pass" },
+			wantReason: "evaluation overall_outcome mismatch",
+		},
+		{
+			name:       "tampered record policy_bundle_version",
+			tamper:     func(p *ledger.Package) { p.Record.PolicyBundleVersion = "v2" },
+			wantReason: "evaluation policy_bundle_version mismatch",
+		},
+		{
+			name:       "tampered record seq",
+			tamper:     func(p *ledger.Package) { p.Record.Seq = 2 },
+			wantReason: "hash mismatch",
+		},
+		{
+			name:       "tampered record interaction_event_id",
+			tamper:     func(p *ledger.Package) { p.Record.InteractionEventID = "interaction-2" },
+			wantReason: "interaction id mismatch",
+		},
+		{
+			name:       "tampered record tenant_id",
+			tamper:     func(p *ledger.Package) { p.Record.TenantID = "tenant-2" },
+			wantReason: "interaction tenant_id mismatch",
+		},
+		{
+			name:       "tampered record evaluation_id",
+			tamper:     func(p *ledger.Package) { p.Record.EvaluationID = "eval-2" },
+			wantReason: "evaluation id mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pkg := buildTestPackage(t)
+			tt.tamper(&pkg)
+
+			result := ledger.VerifyPackage(pkg)
+
+			if result.OK {
+				t.Fatal("VerifyPackage() OK = true, want tampering detected")
+			}
+			if result.BreakReason != tt.wantReason {
+				t.Fatalf("BreakReason = %q, want %q", result.BreakReason, tt.wantReason)
+			}
+		})
+	}
+}
