@@ -162,3 +162,67 @@ func TestTenantScopedTablesHaveTenantIDAndRLSEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestRestrictedAppRoleIsLeastPrivilege(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL app role catalog check in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is required for PostgreSQL app role catalog check")
+	}
+
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var superuser, createDB, createRole, bypassRLS bool
+	if err := db.QueryRowContext(ctx, `
+		select rolsuper, rolcreatedb, rolcreaterole, rolbypassrls
+		from pg_roles
+		where rolname = 'vigia_app'
+	`).Scan(&superuser, &createDB, &createRole, &bypassRLS); err != nil {
+		t.Fatalf("query vigia_app role attributes: %v", err)
+	}
+	if superuser || createDB || createRole || bypassRLS {
+		t.Fatalf("vigia_app privileges = superuser:%t createdb:%t createrole:%t bypassrls:%t, want all false", superuser, createDB, createRole, bypassRLS)
+	}
+
+	var ownedTables int
+	if err := db.QueryRowContext(ctx, `
+		select count(*)
+		from pg_tables
+		where schemaname = 'public'
+		  and tableowner = 'vigia_app'
+	`).Scan(&ownedTables); err != nil {
+		t.Fatalf("query vigia_app table ownership: %v", err)
+	}
+	if ownedTables != 0 {
+		t.Fatalf("vigia_app owns %d public tables, want 0", ownedTables)
+	}
+
+	for _, table := range []string{"tenant_api_keys", "interaction_events", "evaluations", "detector_result_rows"} {
+		t.Run(table, func(t *testing.T) {
+			var canSelect bool
+			if err := db.QueryRowContext(ctx, `select has_table_privilege('vigia_app', 'public.' || $1, 'SELECT')`, table).Scan(&canSelect); err != nil {
+				t.Fatalf("query SELECT grant: %v", err)
+			}
+			if !canSelect {
+				t.Fatalf("vigia_app cannot SELECT from %s", table)
+			}
+
+			var canInsert bool
+			if err := db.QueryRowContext(ctx, `select has_table_privilege('vigia_app', 'public.' || $1, 'INSERT')`, table).Scan(&canInsert); err != nil {
+				t.Fatalf("query INSERT grant: %v", err)
+			}
+			if canInsert {
+				t.Fatalf("vigia_app can INSERT into %s; current RLS tests only require SELECT", table)
+			}
+		})
+	}
+}

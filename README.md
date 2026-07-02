@@ -20,6 +20,7 @@ willingness-to-pay with 2–3 design partners.
 
 It is the convergence of the founder's three interests pointed at a buyer with budget and a
 regulatory gun to their head:
+
 - **Agents as distributed systems** → it is a guardrail / control plane.
 - **Voice** → voice-first by design (WhatsApp prohibits debt collection).
 - **Financial services / portfolios** → it lives in lending / cobranza.
@@ -38,6 +39,26 @@ guardrails, evidence, observability), making it a genuine flagship portfolio pro
 | [docs/technical-design.md](docs/technical-design.md) | Build-ready HOW — verified ADR decisions, data model, module specs |
 | [docs/build-plan.md](docs/build-plan.md) | Milestones M0–M6 (portfolio-first), each independently demoable |
 | [docs/roadmap.md](docs/roadmap.md) | GTM / validation experiments (deferred — selling is secondary) |
+
+## Local database-backed tests
+
+The local Postgres stack uses the migration owner URL for setup and a restricted
+application role URL for RLS isolation checks:
+
+```bash
+make dev
+make migrate-up
+make test-rls
+```
+
+Defaults are defined in the Makefile:
+
+- `DATABASE_URL=postgres://vigia:vigia@localhost:5432/vigia?sslmode=disable`
+- `APP_DATABASE_URL=postgres://vigia_app:vigia_app@localhost:5432/vigia?sslmode=disable`
+
+`make test-db` exports both URLs and runs the full Go suite against the migrated
+local database. The `vigia_app` role is provisioned by the SQL migrations with
+no superuser, table ownership, or `BYPASSRLS` privileges.
 
 ## Key facts (verified, mid-2026)
 
