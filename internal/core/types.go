@@ -75,20 +75,34 @@ type Debtor struct {
 	TenantID    ID
 	ExternalRef string
 	DisplayName string
+	Timezone    string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
 
 type InteractionEvent struct {
-	ID            ID
-	TenantID      ID
-	DebtorID      ID
-	Channel       InteractionChannel
-	Direction     InteractionDirection
-	Status        string
-	OccurredAt    time.Time
-	TranscriptRef *string
-	CreatedAt     time.Time
+	ID             ID
+	TenantID       ID
+	DebtorID       ID
+	Channel        InteractionChannel
+	Direction      InteractionDirection
+	Status         string
+	OccurredAt     time.Time
+	TranscriptRef  *string
+	DebtorTimezone string
+	CreatedAt      time.Time
+}
+
+// Evaluation is the persisted header row proving a policy evaluation ran for
+// an interaction. It records the overall outcome ("pass" | "fail") derived
+// from one or more detector results.
+type Evaluation struct {
+	ID                  ID
+	TenantID            ID
+	InteractionEventID  ID
+	OverallOutcome      string
+	PolicyBundleVersion string
+	CreatedAt           time.Time
 }
 
 type PolicyRule struct {

@@ -15,6 +15,9 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/auth"
 	"github.com/ricardoalt1515/vigia/internal/config"
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
+	"github.com/ricardoalt1515/vigia/internal/detection"
+	"github.com/ricardoalt1515/vigia/internal/evaluation"
+	"github.com/ricardoalt1515/vigia/internal/postgres"
 )
 
 const tenantAPIKeyPrefix = "vigia_tenant_"
@@ -140,6 +143,7 @@ func runDevData(ctx context.Context, args []string) error {
 	debtorRef := flags.String("debtor-ref", "debtor-001", "debtor external ref")
 	debtorName := flags.String("debtor-name", "Juana Pérez (demo)", "debtor display name")
 	label := flags.String("label", "local-dev", "API key label")
+	timezone := flags.String("timezone", defaultDebtorTimezone, "debtor IANA timezone")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -156,13 +160,22 @@ func runDevData(ctx context.Context, args []string) error {
 
 	queries := vigiaDB.New(pool)
 	issuer := defaultKeyIssuer{store: postgresTenantAPIKeyCreator{queries: queries}}
+	evaluator := evaluation.Service{
+		Detectors: []evaluation.NamedDetector{
+			{Code: "contact-hours", Detector: detection.ContactHoursDetector{
+				Window: detection.Window{StartHour: 8, EndHour: 21},
+			}},
+		},
+		Store: postgres.NewEvaluationStoreFromPool(pool),
+	}
 
-	result, err := SeedDevData(ctx, queries, issuer, DevDataParams{
+	result, err := SeedDevData(ctx, queries, issuer, evaluator, DevDataParams{
 		Slug:       *slug,
 		Name:       *name,
 		DebtorRef:  *debtorRef,
 		DebtorName: *debtorName,
 		Label:      *label,
+		Timezone:   *timezone,
 	})
 	if err != nil {
 		return err

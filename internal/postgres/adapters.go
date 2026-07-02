@@ -2,14 +2,19 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ricardoalt1515/vigia/internal/auth"
+	"github.com/ricardoalt1515/vigia/internal/core"
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
+	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/httpapi"
 	"github.com/ricardoalt1515/vigia/internal/tenantdb"
 )
@@ -82,7 +87,7 @@ func (b poolBeginner) Begin(ctx context.Context) (tenantdb.Tx, error) {
 func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID string) ([]httpapi.Interaction, error) {
 	var items []httpapi.Interaction
 	err := tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
-		rows, err := vigiaDB.New(tx).ListCurrentTenantInteractions(ctx, r.limit)
+		rows, err := vigiaDB.New(tx).ListCurrentTenantInteractionsWithOutcome(ctx, r.limit)
 		if err != nil {
 			return err
 		}
@@ -93,6 +98,8 @@ func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID strin
 				OccurredAt: row.OccurredAt.Time,
 				Channel:    row.Channel,
 				Direction:  row.Direction,
+				Outcome:    outcomeToAPI(row.OverallOutcome),
+				Reason:     reasonToAPI(row.Reason),
 			})
 		}
 		return nil
@@ -103,6 +110,162 @@ func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID strin
 	return items, nil
 }
 
+// outcomeToAPI is the single place that upper-cases the persisted
+// overall_outcome for the JSON boundary: "pass" -> "PASS", "fail" -> "BLOCK".
+// A missing (unevaluated) row stays nil — never a fabricated "PASS".
+func outcomeToAPI(overallOutcome *string) *string {
+	if overallOutcome == nil {
+		return nil
+	}
+	var upper string
+	switch *overallOutcome {
+	case "pass":
+		upper = "PASS"
+	case "fail":
+		upper = "BLOCK"
+	default:
+		log.Printf("postgres: outcomeToAPI: unexpected overall_outcome %q, returning nil", *overallOutcome)
+		return nil
+	}
+	return &upper
+}
+
+// reasonToAPI narrows the sqlc-generated `interface{}` for the ->> jsonb
+// text-extraction column (see db/queries/interaction_events.sql) to *string.
+func reasonToAPI(reason any) *string {
+	if reason == nil {
+		return nil
+	}
+	switch v := reason.(type) {
+	case string:
+		return &v
+	case *string:
+		return v
+	default:
+		return nil
+	}
+}
+
 func uuidString(id pgtype.UUID) string {
 	return id.String()
 }
+
+func parseUUID(value string) (pgtype.UUID, error) {
+	var id pgtype.UUID
+	if err := id.Scan(value); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("parse uuid %q: %w", value, err)
+	}
+	return id, nil
+}
+
+// EvaluationStore persists an evaluations header row and its
+// detector_result_rows children inside a single tenantdb.WithTenantTx call.
+type EvaluationStore struct {
+	db tenantdb.Beginner
+}
+
+func NewEvaluationStore(db tenantdb.Beginner) *EvaluationStore {
+	return &EvaluationStore{db: db}
+}
+
+func NewEvaluationStoreFromPool(pool *pgxpool.Pool) *EvaluationStore {
+	return NewEvaluationStore(poolBeginner{pool: pool})
+}
+
+// detectorResultPayload is the minimal JSON shape stored in
+// detector_result_rows.result_payload for a detector's rationale.
+type detectorResultPayload struct {
+	Rationale string `json:"rationale"`
+}
+
+func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.CreateEvaluationInput) (core.Evaluation, error) {
+	tenantUUID, err := parseUUID(in.TenantID)
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+	interactionUUID, err := parseUUID(in.InteractionEventID)
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+
+	var result core.Evaluation
+	err = tenantdb.WithTenantTx(ctx, s.db, in.TenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		q := vigiaDB.New(tx)
+
+		header, err := q.CreateEvaluation(ctx, vigiaDB.CreateEvaluationParams{
+			TenantID:           tenantUUID,
+			InteractionEventID: interactionUUID,
+			OverallOutcome:     in.OverallOutcome,
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, dr := range in.DetectorResults {
+			payload, err := json.Marshal(detectorResultPayload{Rationale: dr.Rationale})
+			if err != nil {
+				return err
+			}
+			if _, err := q.CreateDetectorResultRow(ctx, vigiaDB.CreateDetectorResultRowParams{
+				TenantID:           tenantUUID,
+				InteractionEventID: interactionUUID,
+				DetectorCode:       dr.DetectorCode,
+				Outcome:            string(dr.Outcome),
+				Severity:           string(dr.Severity),
+				ResultPayload:      payload,
+				EvaluationID:       pgtype.UUID{Bytes: header.ID.Bytes, Valid: true},
+			}); err != nil {
+				return err
+			}
+		}
+
+		result = core.Evaluation{
+			ID:                  core.ID(uuidString(header.ID)),
+			TenantID:            core.ID(uuidString(header.TenantID)),
+			InteractionEventID:  core.ID(uuidString(header.InteractionEventID)),
+			OverallOutcome:      header.OverallOutcome,
+			PolicyBundleVersion: header.PolicyBundleVersion,
+			CreatedAt:           header.CreatedAt.Time,
+		}
+		return nil
+	})
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+	return result, nil
+}
+
+var _ evaluation.EvaluationStore = (*EvaluationStore)(nil)
+
+// SummaryReader returns the tenant's out-of-hours (BLOCK) evaluation count
+// via a SQL aggregate, computed inside the tenant-scoped transaction so RLS
+// enforces isolation.
+type SummaryReader struct {
+	db tenantdb.Beginner
+}
+
+func NewSummaryReader(db tenantdb.Beginner) *SummaryReader {
+	return &SummaryReader{db: db}
+}
+
+func NewSummaryReaderFromPool(pool *pgxpool.Pool) *SummaryReader {
+	return NewSummaryReader(poolBeginner{pool: pool})
+}
+
+func (r *SummaryReader) CountOutOfHours(ctx context.Context, tenantID string) (int64, error) {
+	var count int64
+	err := tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		n, err := vigiaDB.New(tx).CountOutOfHoursEvaluations(ctx)
+		if err != nil {
+			return err
+		}
+		count = n
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+var _ httpapi.SummaryReader = (*SummaryReader)(nil)

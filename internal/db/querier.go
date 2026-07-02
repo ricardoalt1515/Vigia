@@ -12,20 +12,31 @@ import (
 
 type Querier interface {
 	AddPolicyBundleRule(ctx context.Context, arg AddPolicyBundleRuleParams) (PolicyBundleRule, error)
-	CreateDebtor(ctx context.Context, arg CreateDebtorParams) (Debtor, error)
-	CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (DetectorResultRow, error)
-	CreateInteractionEvent(ctx context.Context, arg CreateInteractionEventParams) (InteractionEvent, error)
+	CountOutOfHoursEvaluations(ctx context.Context) (int64, error)
+	CreateDebtor(ctx context.Context, arg CreateDebtorParams) (CreateDebtorRow, error)
+	CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (CreateDetectorResultRowRow, error)
+	CreateEvaluation(ctx context.Context, arg CreateEvaluationParams) (Evaluation, error)
+	CreateInteractionEvent(ctx context.Context, arg CreateInteractionEventParams) (CreateInteractionEventRow, error)
 	CreatePolicyBundle(ctx context.Context, arg CreatePolicyBundleParams) (PolicyBundle, error)
 	CreatePolicyRule(ctx context.Context, arg CreatePolicyRuleParams) (PolicyRule, error)
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
 	CreateTenantAPIKey(ctx context.Context, arg CreateTenantAPIKeyParams) (TenantApiKey, error)
-	GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantParams) (Debtor, error)
+	GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantParams) (GetDebtorByTenantRow, error)
+	// Used by cmd/seed to detect whether a pre-existing (re-run) interaction
+	// still needs to be backfilled with an evaluation.
+	GetEvaluationByInteractionEventID(ctx context.Context, arg GetEvaluationByInteractionEventIDParams) (Evaluation, error)
 	GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error)
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
-	ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]InteractionEvent, error)
-	ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]Debtor, error)
-	ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]DetectorResultRow, error)
-	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]InteractionEvent, error)
+	ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsRow, error)
+	// Evaluation runs synchronously, once, at ingest time for this change (#2):
+	// at most one evaluations row per interaction and at most one
+	// detector_result_rows row per evaluation, so a plain LEFT JOIN (no
+	// LATERAL/window function) is sufficient and keeps sqlc's nullability
+	// inference accurate for overall_outcome/reason.
+	ListCurrentTenantInteractionsWithOutcome(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsWithOutcomeRow, error)
+	ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDebtorsByTenantRow, error)
+	ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDetectorResultRowsByTenantRow, error)
+	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListInteractionEventsByTenantRow, error)
 	ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListPolicyBundleRulesByTenantRow, error)
 	ListTenantAPIKeysByTenant(ctx context.Context, tenantID pgtype.UUID) ([]TenantApiKey, error)
 }
