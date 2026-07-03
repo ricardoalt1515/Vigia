@@ -19,6 +19,15 @@ import (
 // rejected instead of persisted.
 var ErrNoDetectors = errors.New("evaluation: no detectors configured")
 
+// ErrMultipleJudgesNotSupported is returned by EvaluateInteraction when more
+// than one Judge is configured. The header fields judgeModelID/rubricVersion/
+// judgeConfidence below are last-judge-wins across s.Judges, so today more
+// than one configured judge would silently clobber provenance for every
+// judge but the last one to run. Real multi-judge support (merging or
+// per-judge rows) is tracked by issue #7; until then this fails fast instead
+// of persisting misleading provenance.
+var ErrMultipleJudgesNotSupported = errors.New("evaluation: multiple judges configured is not supported yet (see issue #7); configure at most one judge")
+
 // NamedDetector pairs a Detector with the stable detector_code persisted
 // alongside its result row.
 type NamedDetector struct {
@@ -138,6 +147,9 @@ func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteraction
 	if len(s.Detectors) == 0 {
 		return core.Evaluation{}, ErrNoDetectors
 	}
+	if len(s.Judges) > 1 {
+		return core.Evaluation{}, ErrMultipleJudgesNotSupported
+	}
 
 	overallOutcome := "pass"
 	results := make([]DetectorResultInput, 0, len(s.Detectors)+len(s.Judges))
@@ -173,6 +185,13 @@ func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteraction
 			Utterances: in.Utterances,
 			Rubric:     s.Rubric,
 		})
+		// judgeModelID/rubricVersion are recorded from every attempt — success
+		// or failure — so a fail-closed HITL row still carries evidence of
+		// which model/rubric MX-REDECO-05 attempted (issue #4 judgment-day
+		// finding: provenance must not go blank just because the judge
+		// failed).
+		judgeModelID = res.JudgeModelID
+		rubricVersion = res.RubricVersion
 		if err != nil {
 			requiresHITL = true
 			overallOutcome = "fail"
@@ -205,8 +224,6 @@ func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteraction
 			Rationale:    res.Rationale,
 			Confidence:   &confidence,
 		})
-		judgeModelID = res.JudgeModelID
-		rubricVersion = res.RubricVersion
 		judgeConfidence = &confidence
 	}
 

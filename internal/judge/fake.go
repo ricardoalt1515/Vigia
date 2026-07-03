@@ -38,19 +38,23 @@ type FakeJudge struct {
 }
 
 func (f FakeJudge) Evaluate(ctx context.Context, in JudgeInput) (JudgeResult, error) {
-	if err := ctx.Err(); err != nil {
-		return JudgeResult{}, err
-	}
-	if f.ForceErr {
-		return JudgeResult{}, ErrTransport
-	}
-	if f.ForceMalformed {
-		return JudgeResult{}, ErrSchemaInvalid
-	}
-
 	rubricVersion := in.Rubric.Version
 	if rubricVersion == "" {
 		rubricVersion = RubricVersion
+	}
+	// attempted carries the rubric/model provenance for every failure path
+	// below, so a caller (evaluation.Service) can record what was attempted
+	// even when the verdict itself fails closed to requires_hitl.
+	attempted := JudgeResult{RubricVersion: rubricVersion, JudgeModelID: fakeJudgeModelID}
+
+	if err := ctx.Err(); err != nil {
+		return attempted, err
+	}
+	if f.ForceErr {
+		return attempted, ErrTransport
+	}
+	if f.ForceMalformed {
+		return attempted, ErrSchemaInvalid
 	}
 
 	if containsThreat(in.Utterances) {

@@ -22,6 +22,15 @@ const DefaultJudgeModelID = "claude-haiku-4-5-20251001"
 // below this value fails closed to requires_hitl.
 const defaultJudgeHITLConfidenceThreshold = 0.75
 
+// validJudgeModes is the enum of accepted JUDGE_MODE values. Load fails fast
+// (MissingKeysError naming JUDGE_MODE) when JUDGE_MODE resolves to anything
+// else, so an unrecognized value (e.g. a typo like "Anthropic") cannot
+// silently fall back to FakeJudge in cmd/seed's buildJudge.
+var validJudgeModes = map[string]bool{
+	"fake":      true,
+	"anthropic": true,
+}
+
 type Config struct {
 	AppEnv         string
 	DatabaseURL    string
@@ -109,6 +118,9 @@ func Load(lookup LookupFunc) (Config, error) {
 	}
 
 	missing := validate(cfg)
+	if !validJudgeModes[cfg.JudgeMode] {
+		missing = append(missing, "JUDGE_MODE")
+	}
 	if cfg.JudgeMode == "anthropic" && cfg.AnthropicAPIKey == "" {
 		missing = append(missing, "ANTHROPIC_API_KEY")
 	}

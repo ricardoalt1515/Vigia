@@ -84,8 +84,9 @@ func (a *AnthropicJudge) Evaluate(ctx context.Context, in JudgeInput) (JudgeResu
 	msg, err := a.client.Messages.New(ctx, req)
 	if err != nil {
 		wrapped := fmt.Errorf("%w: %v", ErrTransport, err)
-		a.logCall(start, rubric, JudgeResult{}, 0, 0, wrapped)
-		return JudgeResult{}, wrapped
+		attempted := JudgeResult{RubricVersion: rubric.Version, JudgeModelID: a.modelID}
+		a.logCall(start, rubric, attempted, 0, 0, wrapped)
+		return attempted, wrapped
 	}
 
 	result, err := a.mapResponse(msg, rubric)
@@ -212,18 +213,20 @@ func (a *AnthropicJudge) mapResponse(msg *anthropic.Message, rubric Rubric) (Jud
 			break
 		}
 	}
+	attempted := JudgeResult{RubricVersion: rubric.Version, JudgeModelID: a.modelID}
+
 	if toolInput == nil {
-		return JudgeResult{}, fmt.Errorf("%w: no record_verdict tool_use block in response", ErrMalformedOutput)
+		return attempted, fmt.Errorf("%w: no record_verdict tool_use block in response", ErrMalformedOutput)
 	}
 
 	verdict, err := validateVerdict(toolInput)
 	if err != nil {
-		return JudgeResult{}, err
+		return attempted, err
 	}
 
 	confidence := quantizeConfidence(verdict.Confidence)
 	if confidence < a.hitlThreshold {
-		return JudgeResult{}, fmt.Errorf("%w: confidence %.4f below threshold %.4f", ErrLowConfidence, confidence, a.hitlThreshold)
+		return attempted, fmt.Errorf("%w: confidence %.4f below threshold %.4f", ErrLowConfidence, confidence, a.hitlThreshold)
 	}
 
 	return JudgeResult{

@@ -189,13 +189,24 @@ func TestAnthropicJudgeCachesStablePrefixNotTranscript(t *testing.T) {
 	}
 	req := rt.captured[0]
 
-	if len(req.System) == 0 {
-		t.Fatal("request carries no system blocks")
+	// System instructions and the rubric are sent as two separate cached
+	// text blocks (not concatenated into one string), and neither embeds
+	// the transcript: the transcript is the volatile, later, uncached
+	// message content block asserted below.
+	if len(req.System) != 2 {
+		t.Fatalf("len(system) = %d, want 2 (instructions block + rubric block)", len(req.System))
 	}
 	for i, block := range req.System {
 		if block.CacheControl == nil {
 			t.Fatalf("system block %d has no cache_control, want ephemeral", i)
 		}
+		if strings.Contains(block.Text, "<transcript>") {
+			t.Fatalf("system block %d contains <transcript>; the transcript must never be embedded in the system prompt: %q", i, block.Text)
+		}
+	}
+	rubric := judge.LoadRubric()
+	if req.System[1].Text != rubric.Prompt {
+		t.Fatalf("system block 1 = %q, want the rubric prompt text", req.System[1].Text)
 	}
 
 	if len(req.Tools) != 1 {
@@ -299,9 +310,12 @@ func TestAnthropicJudgeMissingToolBlockIsMalformedOutput(t *testing.T) {
 	}
 	aj := newTestAnthropicJudge(t, rt)
 
-	_, err := aj.Evaluate(context.Background(), testInput())
+	got, err := aj.Evaluate(context.Background(), testInput())
 	if !errors.Is(err, judge.ErrMalformedOutput) {
 		t.Fatalf("error = %v, want wrapping judge.ErrMalformedOutput", err)
+	}
+	if got.RubricVersion == "" || got.JudgeModelID == "" {
+		t.Fatalf("got = %+v, want RubricVersion/JudgeModelID recorded even on malformed output (attempted provenance)", got)
 	}
 }
 
@@ -315,9 +329,12 @@ func TestAnthropicJudgeSchemaInvalidToolInputIsSchemaInvalid(t *testing.T) {
 	}
 	aj := newTestAnthropicJudge(t, rt)
 
-	_, err := aj.Evaluate(context.Background(), testInput())
+	got, err := aj.Evaluate(context.Background(), testInput())
 	if !errors.Is(err, judge.ErrSchemaInvalid) {
 		t.Fatalf("error = %v, want wrapping judge.ErrSchemaInvalid", err)
+	}
+	if got.RubricVersion == "" || got.JudgeModelID == "" {
+		t.Fatalf("got = %+v, want RubricVersion/JudgeModelID recorded even on schema-invalid output (attempted provenance)", got)
 	}
 }
 
@@ -331,9 +348,12 @@ func TestAnthropicJudgeBelowThresholdConfidenceIsLowConfidence(t *testing.T) {
 	}
 	aj := newTestAnthropicJudge(t, rt)
 
-	_, err := aj.Evaluate(context.Background(), testInput())
+	got, err := aj.Evaluate(context.Background(), testInput())
 	if !errors.Is(err, judge.ErrLowConfidence) {
 		t.Fatalf("error = %v, want wrapping judge.ErrLowConfidence", err)
+	}
+	if got.RubricVersion == "" || got.JudgeModelID == "" {
+		t.Fatalf("got = %+v, want RubricVersion/JudgeModelID recorded even below the confidence threshold (attempted provenance)", got)
 	}
 }
 
@@ -384,11 +404,14 @@ func TestAnthropicJudgeGivesUpAfterExhaustingRetryBudget(t *testing.T) {
 	aj := newTestAnthropicJudge(t, rt)
 
 	start := time.Now()
-	_, err := aj.Evaluate(context.Background(), testInput())
+	got, err := aj.Evaluate(context.Background(), testInput())
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, judge.ErrTransport) {
 		t.Fatalf("error = %v, want wrapping judge.ErrTransport", err)
+	}
+	if got.RubricVersion == "" || got.JudgeModelID == "" {
+		t.Fatalf("got = %+v, want RubricVersion/JudgeModelID recorded even on a transport error (attempted provenance)", got)
 	}
 	// Bounded: must not spin forever. Generous ceiling for CI jitter.
 	if elapsed > 20*time.Second {

@@ -206,7 +206,10 @@ func (s slowJudge) Evaluate(ctx context.Context, in judge.JudgeInput) (judge.Jud
 	case <-time.After(s.delay):
 		return judge.JudgeResult{Outcome: judge.OutcomePass, Confidence: 0.99}, nil
 	case <-ctx.Done():
-		return judge.JudgeResult{}, ctx.Err()
+		// Provenance (rubric/model attempted) is still reported on a timeout,
+		// mirroring AnthropicJudge's fail-closed behavior: a HITL row from a
+		// judge timeout must not lose evidence of what was attempted.
+		return judge.JudgeResult{RubricVersion: judge.RubricVersion, JudgeModelID: "slow-judge-v1"}, ctx.Err()
 	}
 }
 
@@ -223,9 +226,11 @@ type thresholdJudge struct {
 
 func (j thresholdJudge) Evaluate(_ context.Context, _ judge.JudgeInput) (judge.JudgeResult, error) {
 	if j.confidence < j.threshold {
-		return judge.JudgeResult{}, judge.ErrLowConfidence
+		// Provenance is still reported below-threshold, mirroring
+		// AnthropicJudge's fail-closed behavior.
+		return judge.JudgeResult{RubricVersion: judge.RubricVersion, JudgeModelID: "threshold-judge-v1"}, judge.ErrLowConfidence
 	}
-	return judge.JudgeResult{Outcome: judge.OutcomePass, Confidence: j.confidence}, nil
+	return judge.JudgeResult{Outcome: judge.OutcomePass, Confidence: j.confidence, RubricVersion: judge.RubricVersion, JudgeModelID: "threshold-judge-v1"}, nil
 }
 
 func passingDetectorService(store evaluation.EvaluationStore, judges ...evaluation.NamedJudge) evaluation.Service {
@@ -277,6 +282,9 @@ func TestServiceJudgeTimeoutSetsRequiresHITLNeverSilentPass(t *testing.T) {
 	if !judgeRowRationaleContains(call, "timed out") && !judgeRowRationaleContains(call, "deadline") {
 		t.Fatalf("no MX-REDECO-05 detector result row rationale mentions the timeout: %+v", call.DetectorResults)
 	}
+	if call.JudgeModelID == "" || call.RubricVersion == "" {
+		t.Fatalf("call = %+v, want JudgeModelID/RubricVersion recorded even on a judge timeout", call)
+	}
 }
 
 // TestServiceJudgeTransportErrorSetsRequiresHITL covers *Judge transport
@@ -293,6 +301,9 @@ func TestServiceJudgeTransportErrorSetsRequiresHITL(t *testing.T) {
 	}
 	if !judgeRowRationaleContains(call, "transport") {
 		t.Fatalf("no MX-REDECO-05 detector result row rationale references the transport failure: %+v", call.DetectorResults)
+	}
+	if call.JudgeModelID == "" || call.RubricVersion == "" {
+		t.Fatalf("call = %+v, want JudgeModelID/RubricVersion recorded even on a judge transport error", call)
 	}
 }
 
@@ -314,6 +325,9 @@ func TestServiceMalformedJudgeOutputSetsRequiresHITLNeverPass(t *testing.T) {
 	if !judgeRowRationaleContains(call, "malformed") && !judgeRowRationaleContains(call, "invalid") {
 		t.Fatalf("no MX-REDECO-05 detector result row rationale states malformed/invalid: %+v", call.DetectorResults)
 	}
+	if call.JudgeModelID == "" || call.RubricVersion == "" {
+		t.Fatalf("call = %+v, want JudgeModelID/RubricVersion recorded even on malformed judge output", call)
+	}
 }
 
 // TestServiceLowConfidenceSetsRequiresHITL covers *Confidence below
@@ -330,6 +344,9 @@ func TestServiceLowConfidenceSetsRequiresHITL(t *testing.T) {
 	}
 	if !judgeRowRationaleContains(call, "threshold") && !judgeRowRationaleContains(call, "confidence") {
 		t.Fatalf("no MX-REDECO-05 detector result row rationale states below-threshold: %+v", call.DetectorResults)
+	}
+	if call.JudgeModelID == "" || call.RubricVersion == "" {
+		t.Fatalf("call = %+v, want JudgeModelID/RubricVersion recorded even below the confidence threshold", call)
 	}
 }
 
@@ -433,6 +450,35 @@ func TestServiceWiresJudgeAsDistinctTypedStep(t *testing.T) {
 	}
 	if !sawJudgeRow {
 		t.Fatal("no detector result row carries the judge's MX-REDECO-05 code")
+	}
+}
+
+// TestServiceRejectsMultipleJudges covers the multi-judge clobber guard:
+// today the header fields (judgeModelID/rubricVersion/judgeConfidence) are
+// last-judge-wins across s.Judges, so more than one configured judge would
+// silently drop provenance for every judge but the last. Real multi-judge
+// support is issue #7; until then EvaluateInteraction fails fast instead.
+func TestServiceRejectsMultipleJudges(t *testing.T) {
+	store := &fakeEvaluationStore{}
+	svc := passingDetectorService(store,
+		evaluation.NamedJudge{Code: "MX-REDECO-05", Judge: judge.FakeJudge{}},
+		evaluation.NamedJudge{Code: "MX-REDECO-06", Judge: judge.FakeJudge{}},
+	)
+
+	_, err := svc.EvaluateInteraction(context.Background(), evaluation.EvaluateInteractionInput{
+		TenantID:           "tenant-a",
+		InteractionEventID: "interaction-judge",
+		Interaction: detection.Interaction{
+			OccurredAt:     time.Date(2026, 6, 15, 14, 30, 0, 0, time.UTC),
+			DebtorTimezone: "America/Mexico_City",
+		},
+		Utterances: []judge.Utterance{{Speaker: "agent", Text: "Le recordamos su pago."}},
+	})
+	if !errors.Is(err, evaluation.ErrMultipleJudgesNotSupported) {
+		t.Fatalf("err = %v, want ErrMultipleJudgesNotSupported", err)
+	}
+	if len(store.calls) != 0 {
+		t.Fatalf("store.calls = %d, want 0 (multi-judge guard must reject before persisting)", len(store.calls))
 	}
 }
 

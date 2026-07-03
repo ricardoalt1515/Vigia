@@ -9,15 +9,6 @@ import (
 //go:embed prompt/system.v1.md
 var systemPromptTemplate string
 
-// BuildSystemPrompt assembles the stable system-prompt prefix: the fixed
-// injection-boundary instructions followed by the versioned rubric text.
-// This is the ONLY place instructions live — the transcript, built
-// separately by BuildTranscriptBlock, is never concatenated into this
-// string.
-func BuildSystemPrompt(rubric Rubric) string {
-	return systemPromptTemplate + "\n\n" + rubric.Prompt
-}
-
 // BuildTranscriptBlock renders the transcript as a single, clearly
 // delimited data block: <transcript>...</transcript>, with one
 // <utterance speaker="..."> element per Utterance. Speaker and text are

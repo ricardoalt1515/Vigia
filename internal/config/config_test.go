@@ -188,6 +188,51 @@ func TestLoadJudgeHITLConfidenceThresholdInvalidFailsFast(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsUnknownJudgeMode(t *testing.T) {
+	env := baseValidEnv()
+	env["JUDGE_MODE"] = "Anthropic"
+
+	_, err := Load(FromMap(env))
+	if err == nil {
+		t.Fatal("Load returned nil error, want MissingKeysError naming JUDGE_MODE for an unknown value")
+	}
+	var missing MissingKeysError
+	if !errors.As(err, &missing) {
+		t.Fatalf("Load error type = %T, want MissingKeysError", err)
+	}
+	if !strings.Contains(err.Error(), "JUDGE_MODE") {
+		t.Fatalf("Load error %q does not name JUDGE_MODE", err.Error())
+	}
+}
+
+func TestLoadAcceptsKnownJudgeModes(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "fake explicit", value: "fake"},
+		{name: "anthropic with key", value: "anthropic"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := baseValidEnv()
+			env["JUDGE_MODE"] = tt.value
+			if tt.value == "anthropic" {
+				env["ANTHROPIC_API_KEY"] = "sk-ant-test"
+			}
+
+			cfg, err := Load(FromMap(env))
+			if err != nil {
+				t.Fatalf("Load returned unexpected error for JUDGE_MODE=%q: %v", tt.value, err)
+			}
+			if cfg.JudgeMode != tt.value {
+				t.Fatalf("JudgeMode = %q, want %q", cfg.JudgeMode, tt.value)
+			}
+		})
+	}
+}
+
 func TestLoadKeepsBedrockAndAWSOptional(t *testing.T) {
 	env := map[string]string{
 		"APP_ENV":                 "test",

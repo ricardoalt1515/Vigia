@@ -47,22 +47,3 @@ func TestBuildTranscriptBlockDelimitsAsData(t *testing.T) {
 		t.Fatalf("block does not carry speaker=\"debtor\" attribute: %q", block)
 	}
 }
-
-// TestBuildSystemPromptSeparatesInstructionsFromRubric covers the injection
-// boundary at the system-prompt-assembly level: the assembled system prompt
-// text is distinct from (does not itself embed) the transcript.
-func TestBuildSystemPromptSeparatesInstructionsFromRubric(t *testing.T) {
-	rubric := judge.LoadRubric()
-
-	systemPrompt := judge.BuildSystemPrompt(rubric)
-
-	if strings.TrimSpace(systemPrompt) == "" {
-		t.Fatal("system prompt is empty")
-	}
-	if !strings.Contains(systemPrompt, rubric.Prompt) {
-		t.Fatal("system prompt does not include the rubric text")
-	}
-	if strings.Contains(systemPrompt, "<transcript>") {
-		t.Fatal("system prompt must not itself contain a <transcript> block; the transcript is a separate, later content block")
-	}
-}

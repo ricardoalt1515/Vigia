@@ -76,24 +76,30 @@ func TestFakeJudgeEvaluate(t *testing.T) {
 func TestFakeJudgeForceErrReturnsTransportError(t *testing.T) {
 	fj := judge.FakeJudge{ForceErr: true}
 
-	_, err := fj.Evaluate(context.Background(), judge.JudgeInput{Rubric: judge.LoadRubric()})
+	got, err := fj.Evaluate(context.Background(), judge.JudgeInput{Rubric: judge.LoadRubric()})
 	if err == nil {
 		t.Fatal("Evaluate returned nil error, want a forced transport-style error")
 	}
 	if !errors.Is(err, judge.ErrTransport) {
 		t.Fatalf("error = %v, want wrapping judge.ErrTransport", err)
 	}
+	if got.RubricVersion == "" || got.JudgeModelID == "" {
+		t.Fatalf("got = %+v, want RubricVersion/JudgeModelID recorded even on a forced transport error", got)
+	}
 }
 
 func TestFakeJudgeForceMalformedFailsSchemaValidation(t *testing.T) {
 	fj := judge.FakeJudge{ForceMalformed: true}
 
-	_, err := fj.Evaluate(context.Background(), judge.JudgeInput{Rubric: judge.LoadRubric()})
+	got, err := fj.Evaluate(context.Background(), judge.JudgeInput{Rubric: judge.LoadRubric()})
 	if err == nil {
 		t.Fatal("Evaluate returned nil error, want a forced malformed-output error")
 	}
 	if !errors.Is(err, judge.ErrSchemaInvalid) && !errors.Is(err, judge.ErrMalformedOutput) {
 		t.Fatalf("error = %v, want wrapping ErrSchemaInvalid or ErrMalformedOutput", err)
+	}
+	if got.RubricVersion == "" || got.JudgeModelID == "" {
+		t.Fatalf("got = %+v, want RubricVersion/JudgeModelID recorded even on forced malformed output", got)
 	}
 }
 
