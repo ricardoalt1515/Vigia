@@ -525,10 +525,12 @@ Loading + fail-fast:
 - `JUDGE_HITL_CONFIDENCE_THRESHOLD` optional float in `[0,1]`; invalid/out-of-range
   → `MissingKeysError`; empty → `0.75`.
 
-`cmd/api` wiring builds the judge from config: `JUDGE_MODE=fake` →
-`judge.FakeJudge`; `anthropic` → `judge.NewAnthropicJudge(cfg)`. Seed
-(`cmd/seed`) uses the same selector, so seeded data renders the badge with the
-fake by default and the live judge only when a key + `anthropic` mode are set.
+`cmd/seed` wiring builds the judge from config: `JUDGE_MODE=fake` →
+`judge.FakeJudge`; `anthropic` → `judge.NewAnthropicJudge(cfg)`. `cmd/api` has
+no `evaluation.Service` touchpoint at this stage (its HTTP endpoints are
+read-only), so the judge selector is wired only where evaluation runs today —
+the seed evaluator — and seeded data renders the badge with the fake by
+default and the live judge only when a key + `anthropic` mode are set.
 
 ## Seed / dev-data — `cmd/seed/devdata.go`
 

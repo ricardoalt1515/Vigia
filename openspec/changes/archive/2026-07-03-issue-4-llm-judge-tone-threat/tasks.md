@@ -353,6 +353,15 @@ Verification: `go test ./internal/evaluation/... -v` green (zero I/O, fake
 judge only); `go test ./internal/postgres/... -run Evaluation -v` green
 against local Postgres.
 
+Post-verify note (see archived design.md/verify-report.md): item 5.4's
+literal `cmd/api/main.go` wiring text was superseded — `cmd/api` has zero
+`evaluation.Service` touchpoints in this codebase (its endpoints are
+read-only). The judge selector was correctly wired into `cmd/seed/main.go`
+instead, the only place `evaluation.Service` runs in this slice. This was a
+documented, justified deviation confirmed at both apply and verify; the
+functional intent of 5.4 (wire the judge selector into the service that
+actually evaluates) was fully satisfied.
+
 ---
 
 ## Work Unit 6 — Interactions query rewrite + httpapi DTO (test-first)
