@@ -33,6 +33,12 @@ type DetectorResultInput struct {
 	Outcome      core.DetectorOutcome
 	Severity     core.Severity
 	Rationale    string
+
+	// Confidence and Score are issue #4 additions for the judge's result
+	// row: judge rows set Confidence; Score is reserved (nil for now).
+	// Detector rows leave both nil.
+	Confidence *float64
+	Score      *float64
 }
 
 // CreateEvaluationInput is everything an EvaluationStore needs to persist an
@@ -43,6 +49,17 @@ type CreateEvaluationInput struct {
 	InteractionEventID string
 	OverallOutcome     string // "pass" | "fail"
 	DetectorResults    []DetectorResultInput
+
+	// RequiresHITL, JudgeModelID, RubricVersion, and JudgeConfidence are
+	// issue #4 additions: set only when a judge step ran (JudgeModelID !=
+	// "" is the sentinel EvaluationStore implementations use to decide
+	// whether to populate the evidence body's judge sub-object). Zero
+	// values (false, "", "", nil) reproduce today's judge-less behavior
+	// exactly, keeping historical evaluations/evidence byte-identical.
+	RequiresHITL    bool
+	JudgeModelID    string
+	RubricVersion   string
+	JudgeConfidence *float64
 }
 
 // EvaluationStore persists an evaluation. Implementations (internal/postgres)

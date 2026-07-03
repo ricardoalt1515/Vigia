@@ -48,6 +48,114 @@ func buildTestPackage(t *testing.T) ledger.Package {
 	}, results)
 }
 
+// buildTestJudgedPackage builds a package from a judged record's
+// Body.Judge, mirroring buildTestPackage but with the judge sub-object set.
+func buildTestJudgedPackage(t *testing.T) ledger.Package {
+	t.Helper()
+
+	results := baselineDetectorResults()
+	inputsDigest := ledger.ComputeInputsDigest(results)
+	createdAt := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+
+	body := ledger.Body{
+		TenantID:            "tenant-1",
+		InteractionEventID:  "interaction-1",
+		EvaluationID:        "eval-1",
+		Seq:                 1,
+		OverallOutcome:      "fail",
+		PolicyBundleVersion: "",
+		InputsDigest:        inputsDigest,
+		CreatedAt:           createdAt,
+		Judge: &ledger.JudgeEvidence{
+			RubricVersion: "mx-redeco-05.tone-threat.v1",
+			JudgeModelID:  "claude-haiku-4-5-20251001",
+			Confidence:    "0.9500",
+		},
+	}
+	hash := ledger.Hash(ledger.GenesisPrevHash, body)
+
+	rec := ledger.EvidenceRecord{
+		ID:       "record-1",
+		Body:     body,
+		PrevHash: ledger.GenesisPrevHash,
+		Hash:     hash,
+	}
+
+	return ledger.BuildPackage(rec, ledger.PackageInteraction{
+		ID:         "interaction-1",
+		TenantID:   "tenant-1",
+		Channel:    "phone",
+		Direction:  "outbound",
+		OccurredAt: createdAt.Add(-time.Minute),
+	}, ledger.PackageEvaluation{
+		ID:                  "eval-1",
+		OverallOutcome:      "fail",
+		PolicyBundleVersion: "",
+		CreatedAt:           createdAt,
+	}, results)
+}
+
+// TestBuildPackageIncludesJudgeSubObject covers *A new judged record's
+// evidence body carries rubric_version and judge_model_id* at the package
+// export layer: BuildPackage copies Body.Judge into the exported record.
+func TestBuildPackageIncludesJudgeSubObject(t *testing.T) {
+	pkg := buildTestJudgedPackage(t)
+
+	if pkg.Record.Judge == nil {
+		t.Fatal("pkg.Record.Judge is nil, want the judge sub-object copied from Body.Judge")
+	}
+	if pkg.Record.Judge.RubricVersion != "mx-redeco-05.tone-threat.v1" {
+		t.Fatalf("Judge.RubricVersion = %q, want mx-redeco-05.tone-threat.v1", pkg.Record.Judge.RubricVersion)
+	}
+	if pkg.Record.Judge.JudgeModelID != "claude-haiku-4-5-20251001" {
+		t.Fatalf("Judge.JudgeModelID = %q, want claude-haiku-4-5-20251001", pkg.Record.Judge.JudgeModelID)
+	}
+	if pkg.Record.Judge.Confidence != "0.9500" {
+		t.Fatalf("Judge.Confidence = %q, want 0.9500", pkg.Record.Judge.Confidence)
+	}
+}
+
+// TestVerifyPackageOldPackagesWithNoJudgeKeyStillVerify covers backward
+// compatibility: a package with no judge key (the pre-#4 shape) still
+// verifies byte-identically.
+func TestVerifyPackageOldPackagesWithNoJudgeKeyStillVerify(t *testing.T) {
+	pkg := buildTestPackage(t)
+	if pkg.Record.Judge != nil {
+		t.Fatal("buildTestPackage's pkg.Record.Judge is non-nil, want nil for the judge-less fixture")
+	}
+
+	result := ledger.VerifyPackage(pkg)
+	if !result.OK {
+		t.Fatalf("VerifyPackage() OK = false, reason %q, want intact for a judge-less package", result.BreakReason)
+	}
+}
+
+// TestVerifyPackageJudgedRecordRoundTrips covers *A new judged record's
+// evidence body carries rubric_version and judge_model_id* end-to-end: a
+// package built from a judged record's Body.Judge round-trips through
+// VerifyPackage.
+func TestVerifyPackageJudgedRecordRoundTrips(t *testing.T) {
+	pkg := buildTestJudgedPackage(t)
+
+	result := ledger.VerifyPackage(pkg)
+	if !result.OK {
+		t.Fatalf("VerifyPackage() OK = false, reason %q, want intact for a judged package", result.BreakReason)
+	}
+}
+
+func TestVerifyPackageDetectsTamperedJudgeConfidence(t *testing.T) {
+	pkg := buildTestJudgedPackage(t)
+	pkg.Record.Judge.Confidence = "0.8000"
+
+	result := ledger.VerifyPackage(pkg)
+	if result.OK {
+		t.Fatal("VerifyPackage() OK = true, want tampering of Judge.Confidence detected")
+	}
+	if result.BreakReason != "hash mismatch" {
+		t.Fatalf("BreakReason = %q, want hash mismatch", result.BreakReason)
+	}
+}
+
 func TestBuildAndVerifyPackageIntact(t *testing.T) {
 	pkg := buildTestPackage(t)
 

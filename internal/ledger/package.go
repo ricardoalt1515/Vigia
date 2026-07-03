@@ -24,17 +24,20 @@ type PackageEvaluation struct {
 // PackageRecord is exactly the hashed Body plus the chain proof
 // (prev_hash, hash). CreatedAt is rendered as the canonical microsecond-UTC
 // string so the package is byte-identical to what was hashed at insert time.
+// Judge is the issue #4 addition: optional, present only when the source
+// record's Body.Judge was non-nil.
 type PackageRecord struct {
-	TenantID            string `json:"tenant_id"`
-	InteractionEventID  string `json:"interaction_event_id"`
-	EvaluationID        string `json:"evaluation_id"`
-	Seq                 int64  `json:"seq"`
-	OverallOutcome      string `json:"overall_outcome"`
-	PolicyBundleVersion string `json:"policy_bundle_version"`
-	InputsDigest        string `json:"inputs_digest"`
-	CreatedAt           string `json:"created_at"`
-	PrevHash            string `json:"prev_hash"`
-	Hash                string `json:"hash"`
+	TenantID            string         `json:"tenant_id"`
+	InteractionEventID  string         `json:"interaction_event_id"`
+	EvaluationID        string         `json:"evaluation_id"`
+	Seq                 int64          `json:"seq"`
+	OverallOutcome      string         `json:"overall_outcome"`
+	PolicyBundleVersion string         `json:"policy_bundle_version"`
+	InputsDigest        string         `json:"inputs_digest"`
+	CreatedAt           string         `json:"created_at"`
+	PrevHash            string         `json:"prev_hash"`
+	Hash                string         `json:"hash"`
+	Judge               *JudgeEvidence `json:"judge,omitempty"`
 }
 
 // Package is the self-contained evidence export DTO for one interaction.
@@ -80,6 +83,7 @@ func BuildPackage(rec EvidenceRecord, interaction PackageInteraction, eval Packa
 			CreatedAt:           rec.Body.CreatedAt.UTC().Format(canonicalTimeLayout),
 			PrevHash:            rec.PrevHash,
 			Hash:                rec.Hash,
+			Judge:               rec.Body.Judge,
 		},
 	}
 }
@@ -128,6 +132,7 @@ func VerifyPackage(pkg Package) VerifyResult {
 		PolicyBundleVersion: pkg.Record.PolicyBundleVersion,
 		InputsDigest:        pkg.Record.InputsDigest,
 		CreatedAt:           createdAt,
+		Judge:               pkg.Record.Judge,
 	}
 
 	if !isValidPrevHash(pkg.Record.PrevHash) {

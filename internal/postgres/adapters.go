@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -258,6 +259,32 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			InputsDigest:        ledger.ComputeInputsDigest(detectorResults),
 			CreatedAt:           createdAt,
 		}
+
+		// Judge sub-object (issue #4): populated ONLY when a judge ran
+		// (in.JudgeModelID != ""), so judge-less bodies stay byte-identical
+		// to their pre-#4 shape (Decision 6). The three evidence_records
+		// columns are the hash-bearing copy and MUST be written together
+		// with body.Judge — evidenceRowToRecord reconstructs Body.Judge
+		// from these columns on every read, so without them every judged
+		// record would fail re-verification (design's gate-fix CRITICAL).
+		var judgeRubricVersion, judgeModelID, judgeConfidence *string
+		if in.JudgeModelID != "" {
+			confidenceStr := ""
+			if in.JudgeConfidence != nil {
+				confidenceStr = strconv.FormatFloat(*in.JudgeConfidence, 'f', 4, 64)
+			}
+			body.Judge = &ledger.JudgeEvidence{
+				RubricVersion: in.RubricVersion,
+				JudgeModelID:  in.JudgeModelID,
+				Confidence:    confidenceStr,
+			}
+			rubricVersion := in.RubricVersion
+			judgeModel := in.JudgeModelID
+			judgeRubricVersion = &rubricVersion
+			judgeModelID = &judgeModel
+			judgeConfidence = &confidenceStr
+		}
+
 		hash := ledger.Hash(prevHash, body)
 
 		if _, err := q.InsertEvidenceRecord(ctx, vigiaDB.InsertEvidenceRecordParams{
@@ -271,6 +298,9 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			PolicyBundleVersion: body.PolicyBundleVersion,
 			InputsDigest:        body.InputsDigest,
 			CreatedAt:           pgtype.Timestamptz{Time: createdAt, Valid: true},
+			JudgeRubricVersion:  judgeRubricVersion,
+			JudgeModelID:        judgeModelID,
+			JudgeConfidence:     judgeConfidence,
 		}); err != nil {
 			return err
 		}
@@ -484,8 +514,29 @@ func (r *EvidenceReader) GetEvidencePackage(ctx context.Context, tenantID, inter
 var _ httpapi.EvidenceReader = (*EvidenceReader)(nil)
 
 // evidenceRowToRecord maps a generated evidence_records row to the pure
-// ledger.EvidenceRecord shape VerifyChain/VerifyPackage operate on.
+// ledger.EvidenceRecord shape VerifyChain/VerifyPackage operate on. Body.Judge
+// is reconstructed from the three judge_* columns: nil when they are NULL
+// (the judge-less shape, byte-identical to pre-#4 records), populated
+// verbatim when set (judge_confidence is read back exactly as stored — no
+// re-formatting — since it is already the canonical 4-decimal string that
+// was hashed at write time).
 func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {
+	var judge *ledger.JudgeEvidence
+	if row.JudgeModelID != nil {
+		var rubricVersion, confidence string
+		if row.JudgeRubricVersion != nil {
+			rubricVersion = *row.JudgeRubricVersion
+		}
+		if row.JudgeConfidence != nil {
+			confidence = *row.JudgeConfidence
+		}
+		judge = &ledger.JudgeEvidence{
+			RubricVersion: rubricVersion,
+			JudgeModelID:  *row.JudgeModelID,
+			Confidence:    confidence,
+		}
+	}
+
 	return ledger.EvidenceRecord{
 		ID: uuidString(row.ID),
 		Body: ledger.Body{
@@ -497,6 +548,7 @@ func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {
 			PolicyBundleVersion: row.PolicyBundleVersion,
 			InputsDigest:        row.InputsDigest,
 			CreatedAt:           row.CreatedAt.Time,
+			Judge:               judge,
 		},
 		PrevHash: row.PrevHash,
 		Hash:     row.Hash,
