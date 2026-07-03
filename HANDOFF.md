@@ -14,8 +14,17 @@ make dev
 # 2. Apply all goose migrations (including River tables from 00002_river_tables.sql)
 make migrate-up
 
-# 3. Seed demo tenant, debtor, and three es-MX interactions
+# 3. Seed demo tenant, debtor, and six es-MX interactions (three original
+#    fixtures, one out-of-hours demo, and — issue #4 — one threatening and
+#    one neutral synthetic transcript that exercise the MX-REDECO-05
+#    tone/threat judge).
 #    Copy the printed tenant_api_key=<plaintext> value — you need it in step 7.
+#
+#    Judge env vars (issue #4), all optional — defaults work with zero setup:
+#      JUDGE_MODE=fake (default, no key needed) | anthropic
+#      ANTHROPIC_API_KEY=<key>            (required only when JUDGE_MODE=anthropic)
+#      JUDGE_MODEL_ID=<model id>          (default: pinned claude-haiku-4-5-20251001)
+#      JUDGE_HITL_CONFIDENCE_THRESHOLD=<0..1>  (default: 0.75)
 make seed-dev
 
 # 4. Start the Go API server (set DATABASE_URL + APP_DATABASE_URL if not in shell)
@@ -44,8 +53,11 @@ make console-install
 make console-dev
 
 # 8. Open http://localhost:3000
-#    The interactions list page renders the three seeded rows.
+#    The interactions list page renders the seeded rows.
 #    Wrong / missing key → API returns 401 → page shows no rows (RLS proof).
+#    (Issue #4) The threatening seed transcript's row shows a red THREAT
+#    badge and an amber HITL badge; the neutral seed transcript's row shows
+#    neither. Use the "Show only flagged" toggle to filter to those rows.
 ```
 
 **Cleanup:** `make down` stops Postgres + MinIO. `.next` and `node_modules` are gitignored.

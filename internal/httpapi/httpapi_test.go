@@ -28,24 +28,32 @@ func TestGetInteractions(t *testing.T) {
 	}
 	blockOutcome := "BLOCK"
 	blockReason := "outside window"
+	requiresHITL := true
+	threatFlagged := true
+	notRequiresHITL := false
+	notThreatFlagged := false
 	reader := &fakeInteractionReader{
 		itemsByTenant: map[string][]Interaction{
 			"tenant-a": {
 				{
-					ID:         "interaction-a",
-					OccurredAt: fixedTime,
-					Channel:    "phone",
-					Direction:  "outbound",
-					Outcome:    &blockOutcome,
-					Reason:     &blockReason,
+					ID:            "interaction-a",
+					OccurredAt:    fixedTime,
+					Channel:       "phone",
+					Direction:     "outbound",
+					Outcome:       &blockOutcome,
+					Reason:        &blockReason,
+					RequiresHITL:  &requiresHITL,
+					ThreatFlagged: &threatFlagged,
 				},
 				{
-					ID:         "interaction-b",
-					OccurredAt: fixedTime,
-					Channel:    "phone",
-					Direction:  "outbound",
-					Outcome:    nil,
-					Reason:     nil,
+					ID:            "interaction-b",
+					OccurredAt:    fixedTime,
+					Channel:       "phone",
+					Direction:     "outbound",
+					Outcome:       nil,
+					Reason:        nil,
+					RequiresHITL:  &notRequiresHITL,
+					ThreatFlagged: &notThreatFlagged,
 				},
 			},
 		},
@@ -130,6 +138,34 @@ func TestGetInteractions(t *testing.T) {
 		}
 		if got.Reason != nil {
 			t.Fatalf("Reason = %v, want nil", *got.Reason)
+		}
+	})
+
+	t.Run("interaction carries requires_hitl and threat_flagged fields", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/interactions", nil)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		var response interactionsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		flagged := response.Interactions[0]
+		if flagged.RequiresHITL == nil || !*flagged.RequiresHITL {
+			t.Fatalf("RequiresHITL = %v, want true", flagged.RequiresHITL)
+		}
+		if flagged.ThreatFlagged == nil || !*flagged.ThreatFlagged {
+			t.Fatalf("ThreatFlagged = %v, want true", flagged.ThreatFlagged)
+		}
+
+		unflagged := response.Interactions[1]
+		if unflagged.RequiresHITL == nil || *unflagged.RequiresHITL {
+			t.Fatalf("RequiresHITL = %v, want false", unflagged.RequiresHITL)
+		}
+		if unflagged.ThreatFlagged == nil || *unflagged.ThreatFlagged {
+			t.Fatalf("ThreatFlagged = %v, want false", unflagged.ThreatFlagged)
 		}
 	})
 }

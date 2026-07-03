@@ -2,9 +2,11 @@ import "server-only";
 
 // Canonical shape from GET /v1/interactions (internal/httpapi/httpapi.go):
 //   { "interactions": [ { "id", "occurred_at", "channel", "direction",
-//                          "outcome", "reason" }, ... ] }
-// outcome/reason are null when the interaction has not yet been evaluated —
-// the API never fabricates a PASS/BLOCK outcome.
+//                          "outcome", "reason", "requires_hitl",
+//                          "threat_flagged" }, ... ] }
+// outcome/reason/requires_hitl/threat_flagged are null when the interaction
+// has not yet been evaluated — the API never fabricates a PASS/BLOCK
+// outcome or a false flag.
 // The loader also tolerates a bare array for forward compatibility.
 export type Interaction = {
   id: string;
@@ -13,6 +15,8 @@ export type Interaction = {
   direction: string;
   outcome: string | null;
   reason: string | null;
+  requires_hitl: boolean | null;
+  threat_flagged: boolean | null;
 };
 
 function apiConfig() {

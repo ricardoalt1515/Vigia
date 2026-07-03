@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -12,6 +13,7 @@ import (
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
 	"github.com/ricardoalt1515/vigia/internal/detection"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
+	"github.com/ricardoalt1515/vigia/internal/judge"
 )
 
 // SeedQuerier is the minimal read/write port SeedDevData needs.
@@ -24,6 +26,14 @@ type SeedQuerier interface {
 	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]vigiaDB.ListInteractionEventsByTenantRow, error)
 	CreateInteractionEvent(ctx context.Context, arg vigiaDB.CreateInteractionEventParams) (vigiaDB.CreateInteractionEventRow, error)
 	GetEvaluationByInteractionEventID(ctx context.Context, arg vigiaDB.GetEvaluationByInteractionEventIDParams) (vigiaDB.Evaluation, error)
+	CreateInteractionTranscript(ctx context.Context, arg vigiaDB.CreateInteractionTranscriptParams) (vigiaDB.InteractionTranscript, error)
+	GetInteractionTranscriptByInteraction(ctx context.Context, arg vigiaDB.GetInteractionTranscriptByInteractionParams) (vigiaDB.InteractionTranscript, error)
+}
+
+// seedUtterance is the JSON shape stored in interaction_transcripts.utterances.
+type seedUtterance struct {
+	Speaker string `json:"speaker"`
+	Text    string `json:"text"`
 }
 
 // KeyIssuer mints a tenant API key and returns the plaintext key once.
@@ -71,19 +81,50 @@ type DevDataResult struct {
 	Created        DevDataCounts
 }
 
-// interactionFixture describes one seeded interaction event.
+// interactionFixture describes one seeded interaction event. Utterances is
+// nil for fixtures with no transcript content (the original #2/#3
+// fixtures); when non-empty, SeedDevData persists it via
+// interaction_transcripts so the judge has real stored content to read
+// (spec "Seed Provides Threatening and Neutral Synthetic Transcripts").
 type interactionFixture struct {
 	channel       string
 	direction     string
 	transcriptRef string
 	occurredAt    time.Time
+	utterances    []seedUtterance
+}
+
+// threateningTranscriptUtterances is Spanish, MX-REDECO-05-marker synthetic
+// content: it contains a threat-keyword FakeJudge recognizes ("vamos a tu
+// casa"), so the seeded interaction demonstrates a HARD BLOCK + requires_hitl
+// end to end with the default (fake) judge.
+func threateningTranscriptUtterances() []seedUtterance {
+	return []seedUtterance{
+		{Speaker: "agent", Text: "Buenos días, le hablamos de Vigía Cobranza por su adeudo pendiente."},
+		{Speaker: "debtor", Text: "No tengo dinero en este momento, lo siento."},
+		{Speaker: "agent", Text: "Si no pagas hoy mismo, vamos a tu casa y vas a tener problemas serios."},
+	}
+}
+
+// neutralTranscriptUtterances is Spanish synthetic content with no
+// threat-keyword markers, so the seeded interaction demonstrates a PASS
+// judge outcome end to end.
+func neutralTranscriptUtterances() []seedUtterance {
+	return []seedUtterance{
+		{Speaker: "agent", Text: "Buenos días, le hablamos de Vigía Cobranza para recordarle su pago."},
+		{Speaker: "debtor", Text: "Sí, puedo pagar la próxima semana."},
+		{Speaker: "agent", Text: "Perfecto, quedamos así. Que tenga buen día."},
+	}
 }
 
 // devDataFixtures returns the canonical es-MX demo interaction fixtures,
 // including one interaction whose debtor-local wall-clock time falls
 // outside the contact-hours window [08:00:00, 21:00:00) so the
 // out-of-hours outcome and console tile render with dev data (spec
-// "Seed Provides Timezone and an Out-of-Hours Demo Interaction").
+// "Seed Provides Timezone and an Out-of-Hours Demo Interaction"), and one
+// threatening + one neutral synthetic transcript so the tone/threat judge,
+// the requires_hitl flag, and the console threat/HITL badge render with dev
+// data (spec "Seed Provides Threatening and Neutral Synthetic Transcripts").
 func devDataFixtures(now time.Time, debtorLoc *time.Location) []interactionFixture {
 	afterHours := afterHoursInstant(now, debtorLoc)
 	return []interactionFixture{
@@ -110,6 +151,20 @@ func devDataFixtures(now time.Time, debtorLoc *time.Location) []interactionFixtu
 			direction:     string(core.InteractionDirectionOutbound),
 			transcriptRef: "seed/demo/call-02-after-hours",
 			occurredAt:    afterHours,
+		},
+		{
+			channel:       string(core.InteractionChannelCall),
+			direction:     string(core.InteractionDirectionOutbound),
+			transcriptRef: "seed/demo/call-03-threatening",
+			occurredAt:    now.Add(-12 * time.Hour),
+			utterances:    threateningTranscriptUtterances(),
+		},
+		{
+			channel:       string(core.InteractionChannelCall),
+			direction:     string(core.InteractionDirectionOutbound),
+			transcriptRef: "seed/demo/call-04-neutral",
+			occurredAt:    now.Add(-6 * time.Hour),
+			utterances:    neutralTranscriptUtterances(),
 		},
 	}
 }
@@ -230,6 +285,10 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 		if id, alreadyExists := existingByRef[fix.transcriptRef]; alreadyExists {
 			interactionIDs = append(interactionIDs, uuidToString(id))
 
+			if err := ensureTranscript(ctx, q, tenant.ID, id, fix.utterances); err != nil {
+				return DevDataResult{}, fmt.Errorf("ensure transcript for interaction event %s: %w", fix.transcriptRef, err)
+			}
+
 			// Backfill: a pre-existing interaction (e.g. from a prior seed
 			// run) may not have been evaluated yet. Evaluate it now instead
 			// of leaving it permanently unevaluated; the (tenant_id,
@@ -242,6 +301,10 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 				if !isNotFound(err) {
 					return DevDataResult{}, fmt.Errorf("get evaluation for interaction event %s: %w", fix.transcriptRef, err)
 				}
+				utterances, err := resolveUtterances(ctx, q, tenant.ID, id)
+				if err != nil {
+					return DevDataResult{}, fmt.Errorf("resolve utterances for interaction event %s: %w", fix.transcriptRef, err)
+				}
 				if _, err := evaluator.EvaluateInteraction(ctx, evaluation.EvaluateInteractionInput{
 					TenantID:           result.TenantID,
 					InteractionEventID: uuidToString(id),
@@ -249,6 +312,7 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 						OccurredAt:     fix.occurredAt,
 						DebtorTimezone: debtorTimezone,
 					},
+					Utterances: utterances,
 				}); err != nil {
 					return DevDataResult{}, fmt.Errorf("backfill evaluate interaction event %s: %w", fix.transcriptRef, err)
 				}
@@ -276,6 +340,14 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 		interactionIDs = append(interactionIDs, interactionID)
 		result.Created.InteractionsCreated++
 
+		if err := ensureTranscript(ctx, q, tenant.ID, created.ID, fix.utterances); err != nil {
+			return DevDataResult{}, fmt.Errorf("create transcript for interaction event %s: %w", fix.transcriptRef, err)
+		}
+		utterances, err := resolveUtterances(ctx, q, tenant.ID, created.ID)
+		if err != nil {
+			return DevDataResult{}, fmt.Errorf("resolve utterances for interaction event %s: %w", fix.transcriptRef, err)
+		}
+
 		// Evaluate newly created interactions immediately.
 		if _, err := evaluator.EvaluateInteraction(ctx, evaluation.EvaluateInteractionInput{
 			TenantID:           result.TenantID,
@@ -284,6 +356,7 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 				OccurredAt:     fix.occurredAt,
 				DebtorTimezone: debtorTimezone,
 			},
+			Utterances: utterances,
 		}); err != nil {
 			return DevDataResult{}, fmt.Errorf("evaluate interaction event %s: %w", fix.transcriptRef, err)
 		}
@@ -301,6 +374,68 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 	result.PlaintextKey = issued.PlaintextKey
 
 	return result, nil
+}
+
+// ensureTranscript persists utterances as the interaction's transcript
+// content, idempotently: a transcript is created only when the interaction
+// has none yet (mirrors the transcript_ref existence-check pattern). A
+// no-op when utterances is empty (the original #2/#3 fixtures carry no
+// transcript content).
+func ensureTranscript(ctx context.Context, q SeedQuerier, tenantID, interactionEventID pgtype.UUID, utterances []seedUtterance) error {
+	if len(utterances) == 0 {
+		return nil
+	}
+	_, err := q.GetInteractionTranscriptByInteraction(ctx, vigiaDB.GetInteractionTranscriptByInteractionParams{
+		TenantID:           tenantID,
+		InteractionEventID: interactionEventID,
+	})
+	if err == nil {
+		return nil // already exists — idempotent no-op.
+	}
+	if !isNotFound(err) {
+		return fmt.Errorf("get interaction transcript: %w", err)
+	}
+
+	payload, err := json.Marshal(utterances)
+	if err != nil {
+		return fmt.Errorf("marshal utterances: %w", err)
+	}
+	if _, err := q.CreateInteractionTranscript(ctx, vigiaDB.CreateInteractionTranscriptParams{
+		TenantID:           tenantID,
+		InteractionEventID: interactionEventID,
+		Utterances:         payload,
+	}); err != nil {
+		return fmt.Errorf("create interaction transcript: %w", err)
+	}
+	return nil
+}
+
+// resolveUtterances reads the interaction's transcript content back from
+// the store (never from the in-memory fixture) and maps it to
+// judge.Utterance, so the judge always reads the persisted content — the
+// same path a real (non-seed) evaluation would take. Returns nil (no
+// utterances) when the interaction has no transcript row.
+func resolveUtterances(ctx context.Context, q SeedQuerier, tenantID, interactionEventID pgtype.UUID) ([]judge.Utterance, error) {
+	row, err := q.GetInteractionTranscriptByInteraction(ctx, vigiaDB.GetInteractionTranscriptByInteractionParams{
+		TenantID:           tenantID,
+		InteractionEventID: interactionEventID,
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get interaction transcript: %w", err)
+	}
+
+	var stored []seedUtterance
+	if err := json.Unmarshal(row.Utterances, &stored); err != nil {
+		return nil, fmt.Errorf("unmarshal stored utterances: %w", err)
+	}
+	utterances := make([]judge.Utterance, 0, len(stored))
+	for _, u := range stored {
+		utterances = append(utterances, judge.Utterance{Speaker: u.Speaker, Text: u.Text})
+	}
+	return utterances, nil
 }
 
 // isNotFound returns true when err represents "no rows returned" from pgx.

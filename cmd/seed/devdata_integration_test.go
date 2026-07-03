@@ -6,10 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
 	"github.com/ricardoalt1515/vigia/internal/detection"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
+	"github.com/ricardoalt1515/vigia/internal/judge"
 	"github.com/ricardoalt1515/vigia/internal/postgres"
 )
 
@@ -50,7 +52,11 @@ func TestSeedDevDataIntegration(t *testing.T) {
 				Window: detection.Window{StartHour: 8, EndHour: 21},
 			}},
 		},
-		Store: postgres.NewEvaluationStoreFromPool(pool),
+		Judges: []evaluation.NamedJudge{
+			{Code: "MX-REDECO-05", Judge: judge.FakeJudge{}},
+		},
+		Rubric: judge.LoadRubric(),
+		Store:  postgres.NewEvaluationStoreFromPool(pool),
 	}
 
 	params := DevDataParams{
@@ -113,8 +119,9 @@ func TestSeedDevDataIntegration(t *testing.T) {
 		t.Errorf("debtor timezone %q should be a valid IANA zone: %v", debtorTimezone, err)
 	}
 
-	// Assert exactly four interaction events for this tenant (the fixture
-	// transcript_refs, including the out-of-hours fixture), each snapshotting
+	// Assert exactly six interaction events for this tenant (the fixture
+	// transcript_refs, including the out-of-hours fixture and the
+	// threatening/neutral transcript fixtures, issue #4), each snapshotting
 	// the debtor's timezone (spec "Seeded interactions snapshot the debtor's
 	// timezone").
 	events, err := queries.ListInteractionEventsByTenant(ctx, tenant.ID)
@@ -126,10 +133,19 @@ func TestSeedDevDataIntegration(t *testing.T) {
 		"seed/demo/message-01":          false,
 		"seed/demo/email-01":            false,
 		"seed/demo/call-02-after-hours": false,
+		"seed/demo/call-03-threatening": false,
+		"seed/demo/call-04-neutral":     false,
 	}
+	var threateningID, neutralID pgtype.UUID
 	for _, e := range events {
 		if e.TranscriptRef != nil {
 			fixtureRefs[*e.TranscriptRef] = true
+			switch *e.TranscriptRef {
+			case "seed/demo/call-03-threatening":
+				threateningID = e.ID
+			case "seed/demo/call-04-neutral":
+				neutralID = e.ID
+			}
 		}
 		if e.DebtorTimezone != debtorTimezone {
 			t.Errorf("interaction %s debtor_timezone = %q, want %q", uuidToString(e.ID), e.DebtorTimezone, debtorTimezone)
@@ -140,8 +156,54 @@ func TestSeedDevDataIntegration(t *testing.T) {
 			t.Errorf("interaction event with transcript_ref %q not found after seed", ref)
 		}
 	}
-	if len(events) != 4 {
-		t.Errorf("interaction_events count = %d, want 4", len(events))
+	if len(events) != 6 {
+		t.Errorf("interaction_events count = %d, want 6", len(events))
+	}
+
+	// Assert the threatening seed transcript's interaction evaluates to a
+	// HARD BLOCK with requires_hitl=true (spec "Seed includes a threatening
+	// transcript that the judge blocks"), and the neutral seed transcript's
+	// interaction evaluates with requires_hitl=false from the judge step
+	// alone (spec "Seed includes a neutral transcript that the judge
+	// passes").
+	var threateningOutcome string
+	var threateningHITL bool
+	if err := pool.QueryRow(ctx, `
+		SELECT overall_outcome, requires_hitl FROM evaluations WHERE interaction_event_id = $1
+	`, threateningID).Scan(&threateningOutcome, &threateningHITL); err != nil {
+		t.Fatalf("read threatening interaction evaluation: %v", err)
+	}
+	if threateningOutcome != "fail" {
+		t.Errorf("threatening interaction overall_outcome = %q, want fail (HARD BLOCK)", threateningOutcome)
+	}
+	if !threateningHITL {
+		t.Error("threatening interaction requires_hitl = false, want true")
+	}
+
+	var neutralHITL bool
+	if err := pool.QueryRow(ctx, `
+		SELECT requires_hitl FROM evaluations WHERE interaction_event_id = $1
+	`, neutralID).Scan(&neutralHITL); err != nil {
+		t.Fatalf("read neutral interaction evaluation: %v", err)
+	}
+	if neutralHITL {
+		t.Error("neutral interaction requires_hitl = true, want false from the judge step alone")
+	}
+
+	// Re-running seed must not create a duplicate transcript for either
+	// fixture (idempotency).
+	var threateningTranscriptCount, neutralTranscriptCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM interaction_transcripts WHERE interaction_event_id = $1`, threateningID).Scan(&threateningTranscriptCount); err != nil {
+		t.Fatalf("count threatening transcripts: %v", err)
+	}
+	if threateningTranscriptCount != 1 {
+		t.Errorf("threatening transcript count = %d, want 1 (no duplicate on re-run)", threateningTranscriptCount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM interaction_transcripts WHERE interaction_event_id = $1`, neutralID).Scan(&neutralTranscriptCount); err != nil {
+		t.Fatalf("count neutral transcripts: %v", err)
+	}
+	if neutralTranscriptCount != 1 {
+		t.Errorf("neutral transcript count = %d, want 1 (no duplicate on re-run)", neutralTranscriptCount)
 	}
 
 	// Assert at least one seeded interaction evaluates to BLOCK (spec "Seed

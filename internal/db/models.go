@@ -79,6 +79,8 @@ type DetectorResultRow struct {
 	ResultPayload      []byte             `json:"result_payload"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	EvaluationID       pgtype.UUID        `json:"evaluation_id"`
+	Confidence         pgtype.Numeric     `json:"confidence"`
+	Score              pgtype.Numeric     `json:"score"`
 }
 
 type Evaluation struct {
@@ -88,6 +90,9 @@ type Evaluation struct {
 	OverallOutcome      string             `json:"overall_outcome"`
 	PolicyBundleVersion string             `json:"policy_bundle_version"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	RequiresHitl        bool               `json:"requires_hitl"`
+	JudgeModelID        string             `json:"judge_model_id"`
+	RubricVersion       string             `json:"rubric_version"`
 }
 
 type EvidenceRecord struct {
@@ -102,6 +107,9 @@ type EvidenceRecord struct {
 	PolicyBundleVersion string             `json:"policy_bundle_version"`
 	InputsDigest        string             `json:"inputs_digest"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	JudgeRubricVersion  *string            `json:"judge_rubric_version"`
+	JudgeModelID        *string            `json:"judge_model_id"`
+	JudgeConfidence     *string            `json:"judge_confidence"`
 }
 
 type InteractionEvent struct {
@@ -115,6 +123,14 @@ type InteractionEvent struct {
 	TranscriptRef  *string            `json:"transcript_ref"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	DebtorTimezone string             `json:"debtor_timezone"`
+}
+
+type InteractionTranscript struct {
+	ID                 pgtype.UUID        `json:"id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	InteractionEventID pgtype.UUID        `json:"interaction_event_id"`
+	Utterances         []byte             `json:"utterances"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 }
 
 type LedgerChainHead struct {

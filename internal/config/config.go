@@ -5,10 +5,31 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
 type LookupFunc func(key string) (string, bool)
+
+// DefaultJudgeModelID is the pinned Haiku-class snapshot used by the
+// Anthropic judge when JUDGE_MODEL_ID is unset. Verified against
+// anthropic-sdk-go's anthropic.ModelClaudeHaiku4_5_20251001 constant at
+// apply time (issue #4 design decision 7 / flagged decision).
+const DefaultJudgeModelID = "claude-haiku-4-5-20251001"
+
+// defaultJudgeHITLConfidenceThreshold is the conservative default HITL
+// routing threshold (issue #4 design): a judge verdict with confidence
+// below this value fails closed to requires_hitl.
+const defaultJudgeHITLConfidenceThreshold = 0.75
+
+// validJudgeModes is the enum of accepted JUDGE_MODE values. Load fails fast
+// (MissingKeysError naming JUDGE_MODE) when JUDGE_MODE resolves to anything
+// else, so an unrecognized value (e.g. a typo like "Anthropic") cannot
+// silently fall back to FakeJudge in cmd/seed's buildJudge.
+var validJudgeModes = map[string]bool{
+	"fake":      true,
+	"anthropic": true,
+}
 
 type Config struct {
 	AppEnv         string
@@ -16,6 +37,17 @@ type Config struct {
 	ObjectStore    ObjectStoreConfig
 	AWSRegion      string
 	BedrockModelID string
+
+	// AnthropicAPIKey is required only when JudgeMode == "anthropic".
+	AnthropicAPIKey string
+	// JudgeMode selects the judge implementation: "fake" (default, no key
+	// required) or "anthropic".
+	JudgeMode string
+	// JudgeModelID is the pinned model id used by the Anthropic judge.
+	JudgeModelID string
+	// JudgeHITLConfidenceThreshold routes a judge verdict to requires_hitl
+	// when its confidence is below this value, in [0,1].
+	JudgeHITLConfidenceThreshold float64
 }
 
 type ObjectStoreConfig struct {
@@ -58,11 +90,44 @@ func Load(lookup LookupFunc) (Config, error) {
 		},
 		AWSRegion:      optional(lookup, "AWS_REGION"),
 		BedrockModelID: optional(lookup, "BEDROCK_MODEL_ID"),
+
+		AnthropicAPIKey: optional(lookup, "ANTHROPIC_API_KEY"),
+		JudgeMode:       optional(lookup, "JUDGE_MODE"),
+		JudgeModelID:    optional(lookup, "JUDGE_MODEL_ID"),
 	}
 
 	cfg.ObjectStore.UseSSL = strings.HasPrefix(strings.ToLower(cfg.ObjectStore.Endpoint), "https://")
 
-	if missing := validate(cfg); len(missing) > 0 {
+	if cfg.JudgeMode == "" {
+		cfg.JudgeMode = "fake"
+	}
+	if cfg.JudgeModelID == "" {
+		cfg.JudgeModelID = DefaultJudgeModelID
+	}
+
+	thresholdMissing := false
+	if raw, ok := lookup("JUDGE_HITL_CONFIDENCE_THRESHOLD"); ok && strings.TrimSpace(raw) != "" {
+		threshold, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+		if err != nil || threshold < 0 || threshold > 1 {
+			thresholdMissing = true
+		} else {
+			cfg.JudgeHITLConfidenceThreshold = threshold
+		}
+	} else {
+		cfg.JudgeHITLConfidenceThreshold = defaultJudgeHITLConfidenceThreshold
+	}
+
+	missing := validate(cfg)
+	if !validJudgeModes[cfg.JudgeMode] {
+		missing = append(missing, "JUDGE_MODE")
+	}
+	if cfg.JudgeMode == "anthropic" && cfg.AnthropicAPIKey == "" {
+		missing = append(missing, "ANTHROPIC_API_KEY")
+	}
+	if thresholdMissing {
+		missing = append(missing, "JUDGE_HITL_CONFIDENCE_THRESHOLD")
+	}
+	if len(missing) > 0 {
 		return Config{}, MissingKeysError{Keys: missing}
 	}
 	return cfg, nil

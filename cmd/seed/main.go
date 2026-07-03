@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ricardoalt1515/vigia/internal/auth"
@@ -17,8 +18,22 @@ import (
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
 	"github.com/ricardoalt1515/vigia/internal/detection"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
+	"github.com/ricardoalt1515/vigia/internal/judge"
 	"github.com/ricardoalt1515/vigia/internal/postgres"
 )
+
+// buildJudge selects the judge implementation from config.Config.JudgeMode:
+// "anthropic" builds the real Anthropic judge (requires AnthropicAPIKey,
+// already fail-fast validated by config.Load); anything else (including the
+// default "fake") builds the deterministic FakeJudge, so local dev/seed
+// never requires a key. cmd/api and cmd/seed both select the judge this way
+// (design.md's "Judge selection" decision).
+func buildJudge(cfg config.Config) judge.Judge {
+	if cfg.JudgeMode == "anthropic" {
+		return judge.NewAnthropicJudge(cfg.AnthropicAPIKey, anthropic.Model(cfg.JudgeModelID), cfg.JudgeHITLConfidenceThreshold)
+	}
+	return judge.FakeJudge{}
+}
 
 const tenantAPIKeyPrefix = "vigia_tenant_"
 const randomKeyBytes = 32
@@ -166,7 +181,11 @@ func runDevData(ctx context.Context, args []string) error {
 				Window: detection.Window{StartHour: 8, EndHour: 21},
 			}},
 		},
-		Store: postgres.NewEvaluationStoreFromPool(pool),
+		Judges: []evaluation.NamedJudge{
+			{Code: "MX-REDECO-05", Judge: buildJudge(cfg)},
+		},
+		Rubric: judge.LoadRubric(),
+		Store:  postgres.NewEvaluationStoreFromPool(pool),
 	}
 
 	result, err := SeedDevData(ctx, queries, issuer, evaluator, DevDataParams{

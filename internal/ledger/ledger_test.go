@@ -93,3 +93,78 @@ func TestGenesisPrevHashIsEmptyString(t *testing.T) {
 		t.Fatalf("GenesisPrevHash = %q, want empty string", ledger.GenesisPrevHash)
 	}
 }
+
+// TestHashGoldenValueUnchangedWithJudgeFieldAdded covers *Golden-hash test
+// pins the judge-absent body shape unchanged*: re-running the existing #3
+// golden-hash test unmodified, after Body gains the trailing Judge
+// *JudgeEvidence omitempty field, MUST still produce the identical pinned
+// hex. This is a no-diff assertion proving omitempty is inert for
+// judge-less bodies.
+func TestHashGoldenValueUnchangedWithJudgeFieldAdded(t *testing.T) {
+	const wantHash = "4479342d9bbcc290750de7a01f1986d234884e256bcd30965aaa49f05810384d"
+
+	body := goldenBody()
+	body.Judge = nil // explicit: this is the pre-#4, judge-absent shape.
+
+	got := ledger.Hash(ledger.GenesisPrevHash, body)
+	if got != wantHash {
+		t.Fatalf("Hash() = %q, want golden %q (unchanged by the judge-absent Judge field)", got, wantHash)
+	}
+}
+
+// goldenJudgeBody is the fixed, hardcoded judge-present Body used to pin the
+// judge-present canonical hash bytes.
+func goldenJudgeBody() ledger.Body {
+	body := goldenBody()
+	body.Judge = &ledger.JudgeEvidence{
+		RubricVersion: "mx-redeco-05.tone-threat.v1",
+		JudgeModelID:  "claude-haiku-4-5-20251001",
+		Confidence:    "0.9500",
+	}
+	return body
+}
+
+// TestHashGoldenValueJudgePresent covers *Golden-hash test pins the
+// judge-present body shape*: a fixed Body with a fixed JudgeEvidence must
+// hash to an exact pinned hex. This value was computed once via the real
+// implementation and hardcoded here (task 4.4) — any accidental change to
+// the judge sub-object's presence, order, or serialization format must make
+// this test fail.
+func TestHashGoldenValueJudgePresent(t *testing.T) {
+	const wantHash = "970ee863644efec78dc0502dbb8add843af48e4822d9463102a7cbc5a06e0455"
+
+	got := ledger.Hash(ledger.GenesisPrevHash, goldenJudgeBody())
+	if len(got) != 64 {
+		t.Fatalf("Hash() = %q, want a 64-char hex digest", got)
+	}
+	if got != wantHash {
+		t.Fatalf("Hash() = %q, want golden %q", got, wantHash)
+	}
+}
+
+// TestChainVerifiesAcrossJudgeShapeChange covers linkage across the shape
+// change: a chain with a judge-less record followed by a judged record
+// VerifyChains OK.
+func TestChainVerifiesAcrossJudgeShapeChange(t *testing.T) {
+	first := goldenBody()
+	first.Judge = nil
+	first.Seq = 1
+	firstHash := ledger.Hash(ledger.GenesisPrevHash, first)
+
+	second := goldenJudgeBody()
+	second.Seq = 2
+	secondHash := ledger.Hash(firstHash, second)
+
+	records := []ledger.EvidenceRecord{
+		{ID: "r1", Body: first, PrevHash: ledger.GenesisPrevHash, Hash: firstHash},
+		{ID: "r2", Body: second, PrevHash: firstHash, Hash: secondHash},
+	}
+
+	result := ledger.VerifyChain(records)
+	if !result.OK {
+		t.Fatalf("VerifyChain() = %+v, want OK across the judge-less -> judged shape change", result)
+	}
+	if result.Count != 2 {
+		t.Fatalf("VerifyChain().Count = %d, want 2", result.Count)
+	}
+}

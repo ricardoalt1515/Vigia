@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -95,12 +96,14 @@ func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID strin
 		items = make([]httpapi.Interaction, 0, len(rows))
 		for _, row := range rows {
 			items = append(items, httpapi.Interaction{
-				ID:         uuidString(row.ID),
-				OccurredAt: row.OccurredAt.Time,
-				Channel:    row.Channel,
-				Direction:  row.Direction,
-				Outcome:    outcomeToAPI(row.OverallOutcome),
-				Reason:     reasonToAPI(row.Reason),
+				ID:            uuidString(row.ID),
+				OccurredAt:    row.OccurredAt.Time,
+				Channel:       row.Channel,
+				Direction:     row.Direction,
+				Outcome:       outcomeToAPI(row.OverallOutcome),
+				Reason:        reasonToAPI(row.Reason),
+				RequiresHITL:  row.RequiresHitl,
+				ThreatFlagged: threatFlaggedToAPI(row.ThreatFlagged),
 			})
 		}
 		return nil
@@ -147,6 +150,24 @@ func reasonToAPI(reason any) *string {
 	}
 }
 
+// threatFlaggedToAPI narrows the sqlc-generated `interface{}` for the
+// CASE-guarded threat_flagged column (see db/queries/interaction_events.sql)
+// to *bool: nil when the interaction has no evaluation at all, never a
+// fabricated false.
+func threatFlaggedToAPI(threatFlagged any) *bool {
+	if threatFlagged == nil {
+		return nil
+	}
+	switch v := threatFlagged.(type) {
+	case bool:
+		return &v
+	case *bool:
+		return v
+	default:
+		return nil
+	}
+}
+
 func uuidString(id pgtype.UUID) string {
 	return id.String()
 }
@@ -179,6 +200,21 @@ type detectorResultPayload struct {
 	Rationale string `json:"rationale"`
 }
 
+// numericFromFloatPtr converts an optional confidence/score float into the
+// numeric(5,4) column's pgtype.Numeric, formatted to 4 decimals to match the
+// same quantization the judge and the hashed evidence body use. A nil
+// pointer produces a SQL NULL (detector rows leave Confidence/Score nil).
+func numericFromFloatPtr(v *float64) (pgtype.Numeric, error) {
+	var n pgtype.Numeric
+	if v == nil {
+		return n, nil
+	}
+	if err := n.Scan(strconv.FormatFloat(*v, 'f', 4, 64)); err != nil {
+		return pgtype.Numeric{}, fmt.Errorf("scan numeric confidence/score: %w", err)
+	}
+	return n, nil
+}
+
 func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.CreateEvaluationInput) (core.Evaluation, error) {
 	tenantUUID, err := parseUUID(in.TenantID)
 	if err != nil {
@@ -197,6 +233,9 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			TenantID:           tenantUUID,
 			InteractionEventID: interactionUUID,
 			OverallOutcome:     in.OverallOutcome,
+			RequiresHitl:       in.RequiresHITL,
+			JudgeModelID:       in.JudgeModelID,
+			RubricVersion:      in.RubricVersion,
 		})
 		if err != nil {
 			return err
@@ -208,6 +247,14 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			if err != nil {
 				return err
 			}
+			confidence, err := numericFromFloatPtr(dr.Confidence)
+			if err != nil {
+				return err
+			}
+			score, err := numericFromFloatPtr(dr.Score)
+			if err != nil {
+				return err
+			}
 			if _, err := q.CreateDetectorResultRow(ctx, vigiaDB.CreateDetectorResultRowParams{
 				TenantID:           tenantUUID,
 				InteractionEventID: interactionUUID,
@@ -216,6 +263,8 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 				Severity:           string(dr.Severity),
 				ResultPayload:      payload,
 				EvaluationID:       pgtype.UUID{Bytes: header.ID.Bytes, Valid: true},
+				Confidence:         confidence,
+				Score:              score,
 			}); err != nil {
 				return err
 			}
@@ -258,6 +307,32 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			InputsDigest:        ledger.ComputeInputsDigest(detectorResults),
 			CreatedAt:           createdAt,
 		}
+
+		// Judge sub-object (issue #4): populated ONLY when a judge ran
+		// (in.JudgeModelID != ""), so judge-less bodies stay byte-identical
+		// to their pre-#4 shape (Decision 6). The three evidence_records
+		// columns are the hash-bearing copy and MUST be written together
+		// with body.Judge — evidenceRowToRecord reconstructs Body.Judge
+		// from these columns on every read, so without them every judged
+		// record would fail re-verification (design's gate-fix CRITICAL).
+		var judgeRubricVersion, judgeModelID, judgeConfidence *string
+		if in.JudgeModelID != "" {
+			confidenceStr := ""
+			if in.JudgeConfidence != nil {
+				confidenceStr = strconv.FormatFloat(*in.JudgeConfidence, 'f', 4, 64)
+			}
+			body.Judge = &ledger.JudgeEvidence{
+				RubricVersion: in.RubricVersion,
+				JudgeModelID:  in.JudgeModelID,
+				Confidence:    confidenceStr,
+			}
+			rubricVersion := in.RubricVersion
+			judgeModel := in.JudgeModelID
+			judgeRubricVersion = &rubricVersion
+			judgeModelID = &judgeModel
+			judgeConfidence = &confidenceStr
+		}
+
 		hash := ledger.Hash(prevHash, body)
 
 		if _, err := q.InsertEvidenceRecord(ctx, vigiaDB.InsertEvidenceRecordParams{
@@ -271,6 +346,9 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			PolicyBundleVersion: body.PolicyBundleVersion,
 			InputsDigest:        body.InputsDigest,
 			CreatedAt:           pgtype.Timestamptz{Time: createdAt, Valid: true},
+			JudgeRubricVersion:  judgeRubricVersion,
+			JudgeModelID:        judgeModelID,
+			JudgeConfidence:     judgeConfidence,
 		}); err != nil {
 			return err
 		}
@@ -484,8 +562,29 @@ func (r *EvidenceReader) GetEvidencePackage(ctx context.Context, tenantID, inter
 var _ httpapi.EvidenceReader = (*EvidenceReader)(nil)
 
 // evidenceRowToRecord maps a generated evidence_records row to the pure
-// ledger.EvidenceRecord shape VerifyChain/VerifyPackage operate on.
+// ledger.EvidenceRecord shape VerifyChain/VerifyPackage operate on. Body.Judge
+// is reconstructed from the three judge_* columns: nil when they are NULL
+// (the judge-less shape, byte-identical to pre-#4 records), populated
+// verbatim when set (judge_confidence is read back exactly as stored — no
+// re-formatting — since it is already the canonical 4-decimal string that
+// was hashed at write time).
 func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {
+	var judge *ledger.JudgeEvidence
+	if row.JudgeModelID != nil {
+		var rubricVersion, confidence string
+		if row.JudgeRubricVersion != nil {
+			rubricVersion = *row.JudgeRubricVersion
+		}
+		if row.JudgeConfidence != nil {
+			confidence = *row.JudgeConfidence
+		}
+		judge = &ledger.JudgeEvidence{
+			RubricVersion: rubricVersion,
+			JudgeModelID:  *row.JudgeModelID,
+			Confidence:    confidence,
+		}
+	}
+
 	return ledger.EvidenceRecord{
 		ID: uuidString(row.ID),
 		Body: ledger.Body{
@@ -497,6 +596,7 @@ func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {
 			PolicyBundleVersion: row.PolicyBundleVersion,
 			InputsDigest:        row.InputsDigest,
 			CreatedAt:           row.CreatedAt.Time,
+			Judge:               judge,
 		},
 		PrevHash: row.PrevHash,
 		Hash:     row.Hash,

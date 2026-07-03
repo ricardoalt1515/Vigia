@@ -31,21 +31,38 @@ type DetectorResult struct {
 	Rationale string
 }
 
+// JudgeEvidence is the LLM-judge sub-object recorded on Body ONLY when a
+// judge produced a verdict for that evaluation (issue #4). Confidence is a
+// fixed 4-decimal string (e.g. "0.9500"), never a float — a raw float64
+// would risk the same numeric-round-trip drift hazard as CreatedAt (see
+// canonicalTimeLayout's doc comment), so the already-canonical string is
+// what gets hashed and what must be stored/read back verbatim.
+type JudgeEvidence struct {
+	RubricVersion string `json:"rubric_version"`
+	JudgeModelID  string `json:"judge_model_id"`
+	Confidence    string `json:"confidence"`
+}
+
 // Body is the hashed content of a record. FIELD ORDER IS LOAD-BEARING:
 // encoding/json emits struct fields in declaration order, and that order is
 // baked into every stored hash. Do not reorder, add, or remove fields
 // without a migration + a new golden hash. CreatedAt is serialized by the
 // fixed microsecond UTC formatter (see canonicalBody), NOT time.Time's
-// default JSON marshaling.
+// default JSON marshaling. Judge is the sole issue-#4 addition: a trailing,
+// conditional (omitempty) pointer field so judge-less bodies (the pre-#4
+// shape, and any future judge-less evaluation) serialize byte-identically —
+// omitempty on a nil pointer omits the key entirely, never emitting
+// "judge":null.
 type Body struct {
-	TenantID            string    `json:"tenant_id"`
-	InteractionEventID  string    `json:"interaction_event_id"`
-	EvaluationID        string    `json:"evaluation_id"`
-	Seq                 int64     `json:"seq"`
-	OverallOutcome      string    `json:"overall_outcome"`
-	PolicyBundleVersion string    `json:"policy_bundle_version"`
-	InputsDigest        string    `json:"inputs_digest"`
-	CreatedAt           time.Time `json:"created_at"`
+	TenantID            string         `json:"tenant_id"`
+	InteractionEventID  string         `json:"interaction_event_id"`
+	EvaluationID        string         `json:"evaluation_id"`
+	Seq                 int64          `json:"seq"`
+	OverallOutcome      string         `json:"overall_outcome"`
+	PolicyBundleVersion string         `json:"policy_bundle_version"`
+	InputsDigest        string         `json:"inputs_digest"`
+	CreatedAt           time.Time      `json:"created_at"`
+	Judge               *JudgeEvidence `json:"judge,omitempty"`
 }
 
 // EvidenceRecord is a persisted, hashed ledger entry.
@@ -58,16 +75,20 @@ type EvidenceRecord struct {
 
 // canonicalBodyDTO mirrors Body but renders CreatedAt through the fixed
 // canonicalTimeLayout string instead of time.Time's default marshaling, so
-// the hashed bytes never drift with Go's default JSON time format.
+// the hashed bytes never drift with Go's default JSON time format. Judge
+// mirrors Body.Judge's omitempty pointer directly: encoding/json omits a
+// nil *JudgeEvidence entirely, so judge-less bodies serialize identically
+// to their pre-#4 shape.
 type canonicalBodyDTO struct {
-	TenantID            string `json:"tenant_id"`
-	InteractionEventID  string `json:"interaction_event_id"`
-	EvaluationID        string `json:"evaluation_id"`
-	Seq                 int64  `json:"seq"`
-	OverallOutcome      string `json:"overall_outcome"`
-	PolicyBundleVersion string `json:"policy_bundle_version"`
-	InputsDigest        string `json:"inputs_digest"`
-	CreatedAt           string `json:"created_at"`
+	TenantID            string         `json:"tenant_id"`
+	InteractionEventID  string         `json:"interaction_event_id"`
+	EvaluationID        string         `json:"evaluation_id"`
+	Seq                 int64          `json:"seq"`
+	OverallOutcome      string         `json:"overall_outcome"`
+	PolicyBundleVersion string         `json:"policy_bundle_version"`
+	InputsDigest        string         `json:"inputs_digest"`
+	CreatedAt           string         `json:"created_at"`
+	Judge               *JudgeEvidence `json:"judge,omitempty"`
 }
 
 // canonicalBody marshals Body deterministically. created_at is rendered by a
@@ -83,6 +104,7 @@ func canonicalBody(b Body) []byte {
 		PolicyBundleVersion: b.PolicyBundleVersion,
 		InputsDigest:        b.InputsDigest,
 		CreatedAt:           b.CreatedAt.UTC().Format(canonicalTimeLayout),
+		Judge:               b.Judge,
 	}
 	// encoding/json marshals struct fields in declaration order; the error
 	// path here is unreachable for this DTO (no channels/funcs/cyclic types).
