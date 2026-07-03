@@ -168,10 +168,26 @@ SELECT
     ie.id, ie.tenant_id, ie.debtor_id, ie.channel, ie.direction, ie.status,
     ie.occurred_at, ie.transcript_ref, ie.debtor_timezone, ie.created_at,
     e.overall_outcome,
-    dr.result_payload ->> 'rationale' AS reason
+    e.requires_hitl,
+    CASE WHEN e.id IS NULL THEN NULL ELSE agg.threat_flagged END AS threat_flagged,
+    agg.reason
 FROM interaction_events ie
 LEFT JOIN evaluations e ON e.interaction_event_id = ie.id
-LEFT JOIN detector_result_rows dr ON dr.evaluation_id = e.id
+LEFT JOIN LATERAL (
+    SELECT
+        bool_or(dr.detector_code = 'MX-REDECO-05' AND dr.outcome IN ('fail', 'review'))
+            AS threat_flagged,
+        (array_agg(
+            dr.result_payload ->> 'rationale'
+            ORDER BY
+                CASE dr.severity
+                    WHEN 'critical' THEN 4 WHEN 'high' THEN 3
+                    WHEN 'medium'  THEN 2 WHEN 'low'   THEN 1 ELSE 0 END DESC,
+                dr.detector_code ASC
+        ))[1] AS reason
+    FROM detector_result_rows dr
+    WHERE dr.evaluation_id = e.id
+) agg ON true
 ORDER BY ie.occurred_at DESC
 LIMIT $1
 `
@@ -188,14 +204,17 @@ type ListCurrentTenantInteractionsWithOutcomeRow struct {
 	DebtorTimezone string             `json:"debtor_timezone"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	OverallOutcome *string            `json:"overall_outcome"`
+	RequiresHitl   *bool              `json:"requires_hitl"`
+	ThreatFlagged  interface{}        `json:"threat_flagged"`
 	Reason         interface{}        `json:"reason"`
 }
 
-// Evaluation runs synchronously, once, at ingest time for this change (#2):
-// at most one evaluations row per interaction and at most one
-// detector_result_rows row per evaluation, so a plain LEFT JOIN (no
-// LATERAL/window function) is sufficient and keeps sqlc's nullability
-// inference accurate for overall_outcome/reason.
+// Issue #4 rewrite: aggregates across detector_result_rows per evaluation
+// (worst-severity-wins for the displayed reason, bool_or threat_flagged for
+// MX-REDECO-05) instead of assuming at most one detector result per
+// evaluation. One row per interaction — the LATERAL subquery collapses
+// every detector_result_rows child before the join, so a second
+// detector/judge result never fans out the interaction row.
 func (q *Queries) ListCurrentTenantInteractionsWithOutcome(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsWithOutcomeRow, error) {
 	rows, err := q.db.Query(ctx, listCurrentTenantInteractionsWithOutcome, limit)
 	if err != nil {
@@ -217,6 +236,8 @@ func (q *Queries) ListCurrentTenantInteractionsWithOutcome(ctx context.Context, 
 			&i.DebtorTimezone,
 			&i.CreatedAt,
 			&i.OverallOutcome,
+			&i.RequiresHitl,
+			&i.ThreatFlagged,
 			&i.Reason,
 		); err != nil {
 			return nil, err

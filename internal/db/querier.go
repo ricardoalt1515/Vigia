@@ -36,11 +36,12 @@ type Querier interface {
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
 	InsertEvidenceRecord(ctx context.Context, arg InsertEvidenceRecordParams) (EvidenceRecord, error)
 	ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsRow, error)
-	// Evaluation runs synchronously, once, at ingest time for this change (#2):
-	// at most one evaluations row per interaction and at most one
-	// detector_result_rows row per evaluation, so a plain LEFT JOIN (no
-	// LATERAL/window function) is sufficient and keeps sqlc's nullability
-	// inference accurate for overall_outcome/reason.
+	// Issue #4 rewrite: aggregates across detector_result_rows per evaluation
+	// (worst-severity-wins for the displayed reason, bool_or threat_flagged for
+	// MX-REDECO-05) instead of assuming at most one detector result per
+	// evaluation. One row per interaction — the LATERAL subquery collapses
+	// every detector_result_rows child before the join, so a second
+	// detector/judge result never fans out the interaction row.
 	ListCurrentTenantInteractionsWithOutcome(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsWithOutcomeRow, error)
 	ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDebtorsByTenantRow, error)
 	// Package detector layer for evidence export, sorted by detector_code.

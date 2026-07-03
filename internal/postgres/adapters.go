@@ -96,12 +96,14 @@ func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID strin
 		items = make([]httpapi.Interaction, 0, len(rows))
 		for _, row := range rows {
 			items = append(items, httpapi.Interaction{
-				ID:         uuidString(row.ID),
-				OccurredAt: row.OccurredAt.Time,
-				Channel:    row.Channel,
-				Direction:  row.Direction,
-				Outcome:    outcomeToAPI(row.OverallOutcome),
-				Reason:     reasonToAPI(row.Reason),
+				ID:            uuidString(row.ID),
+				OccurredAt:    row.OccurredAt.Time,
+				Channel:       row.Channel,
+				Direction:     row.Direction,
+				Outcome:       outcomeToAPI(row.OverallOutcome),
+				Reason:        reasonToAPI(row.Reason),
+				RequiresHITL:  row.RequiresHitl,
+				ThreatFlagged: threatFlaggedToAPI(row.ThreatFlagged),
 			})
 		}
 		return nil
@@ -142,6 +144,24 @@ func reasonToAPI(reason any) *string {
 	case string:
 		return &v
 	case *string:
+		return v
+	default:
+		return nil
+	}
+}
+
+// threatFlaggedToAPI narrows the sqlc-generated `interface{}` for the
+// CASE-guarded threat_flagged column (see db/queries/interaction_events.sql)
+// to *bool: nil when the interaction has no evaluation at all, never a
+// fabricated false.
+func threatFlaggedToAPI(threatFlagged any) *bool {
+	if threatFlagged == nil {
+		return nil
+	}
+	switch v := threatFlagged.(type) {
+	case bool:
+		return &v
+	case *bool:
 		return v
 	default:
 		return nil

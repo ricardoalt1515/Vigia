@@ -11,16 +11,19 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/ledger"
 )
 
-// Interaction is the API DTO for GET /v1/interactions. Outcome and Reason
-// are nil when the interaction has not yet been evaluated — the API never
-// fabricates a PASS/BLOCK outcome for an unevaluated interaction.
+// Interaction is the API DTO for GET /v1/interactions. Outcome, Reason,
+// RequiresHITL, and ThreatFlagged are all nil when the interaction has not
+// yet been evaluated — the API never fabricates a PASS/BLOCK outcome or a
+// false flag for an unevaluated interaction.
 type Interaction struct {
-	ID         string    `json:"id"`
-	OccurredAt time.Time `json:"occurred_at"`
-	Channel    string    `json:"channel"`
-	Direction  string    `json:"direction"`
-	Outcome    *string   `json:"outcome"`
-	Reason     *string   `json:"reason"`
+	ID            string    `json:"id"`
+	OccurredAt    time.Time `json:"occurred_at"`
+	Channel       string    `json:"channel"`
+	Direction     string    `json:"direction"`
+	Outcome       *string   `json:"outcome"`
+	Reason        *string   `json:"reason"`
+	RequiresHITL  *bool     `json:"requires_hitl"`
+	ThreatFlagged *bool     `json:"threat_flagged"`
 }
 
 type InteractionReader interface {
