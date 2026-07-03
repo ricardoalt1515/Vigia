@@ -68,3 +68,10 @@ Chain strategy: stacked-to-main
   - Verification: `go test ./internal/auth ./internal/tenantdb ./internal/httpapi ./cmd/seed -count=1`
 - [x] Run the broader suite only after #13 is stable and the worktree is clean.
   - Verification: `go test ./...`
+
+## Archive note (2026-07-03)
+
+All PR 1, PR 2, PR 3, and Final validation tasks are checked complete — 0
+unchecked implementation tasks remain, consistent with `apply-progress.md`'s
+"Remaining tasks: No unchecked implementation tasks remain in `tasks.md` for
+issue #14."

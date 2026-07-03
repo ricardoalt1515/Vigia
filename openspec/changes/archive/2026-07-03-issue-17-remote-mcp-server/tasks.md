@@ -69,3 +69,7 @@ Implement the first reviewable slice of issue #17: a local MCP-compatible JSON-R
 - [ ] Draft/write tools returning `approval_required` or non-mutating drafts.
 - [ ] Richer client setup docs per target AI client.
 - [ ] Archive/sync specs after verification.
+
+## Archive note (2026-07-03)
+
+All "First slice tasks" (sections 1-6) are complete — 0 unchecked implementation tasks. The "Follow-up tasks outside first slice" section lists explicitly out-of-scope future work (remote HTTP/SSE transport, DB-backed index, draft/write tools, richer docs), not deferred first-slice work; their unchecked state does not block archive, consistent with the same convention applied to `issue-4-llm-judge-tone-threat`'s follow-up section.

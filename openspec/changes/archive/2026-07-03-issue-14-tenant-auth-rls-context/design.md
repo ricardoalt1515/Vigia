@@ -229,3 +229,12 @@ These are not product blockers; they are dependency-shape checks after #13 lands
 - `SET LOCAL app.tenant_id` happens inside the protected request transaction.
 - RLS isolation is proven by a query that omits an explicit tenant filter.
 - #1 can later build the console list on this API without redesigning tenant auth.
+
+## Deviation note (applied at implementation, confirmed at archive)
+
+The implementation used `SELECT set_config('app.tenant_id', $1, true)` rather
+than literal `SET LOCAL app.tenant_id = $1`, because PostgreSQL parameters
+are safely supported in function calls and the third `true` argument gives
+transaction-local behavior equivalent to `SET LOCAL`. This preserves the
+design's core safety invariant (tenant context is scoped to the request
+transaction) and is documented in `apply-progress.md`.
