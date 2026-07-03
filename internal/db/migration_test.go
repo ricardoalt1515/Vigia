@@ -21,6 +21,7 @@ var tenantScopedTables = []string{
 	"detector_result_rows",
 	"evidence_records",
 	"ledger_chain_heads",
+	"interaction_transcripts",
 }
 
 func TestMigrationPreservesTenantScopedParentChildIntegrity(t *testing.T) {
@@ -165,6 +166,118 @@ func TestTenantScopedTablesHaveTenantIDAndRLSEnabled(t *testing.T) {
 	}
 }
 
+// TestMigration00006AddsNullableJudgeColumns covers *Migration adds nullable
+// judge columns without breaking existing rows*: the additive
+// evaluations/detector_result_rows/evidence_records columns from migration
+// 00006 must exist with the documented nullability.
+func TestMigration00006AddsNullableJudgeColumns(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL catalog check in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is required for PostgreSQL catalog check")
+	}
+
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tests := []struct {
+		table      string
+		column     string
+		isNullable string
+	}{
+		{table: "evaluations", column: "requires_hitl", isNullable: "NO"},
+		{table: "evaluations", column: "judge_model_id", isNullable: "NO"},
+		{table: "evaluations", column: "rubric_version", isNullable: "NO"},
+		{table: "detector_result_rows", column: "confidence", isNullable: "YES"},
+		{table: "detector_result_rows", column: "score", isNullable: "YES"},
+		{table: "evidence_records", column: "judge_rubric_version", isNullable: "YES"},
+		{table: "evidence_records", column: "judge_model_id", isNullable: "YES"},
+		{table: "evidence_records", column: "judge_confidence", isNullable: "YES"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.table+"."+tt.column, func(t *testing.T) {
+			var isNullable string
+			err := db.QueryRowContext(ctx, `
+				SELECT is_nullable FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
+			`, tt.table, tt.column).Scan(&isNullable)
+			if err != nil {
+				t.Fatalf("query column metadata for %s.%s: %v", tt.table, tt.column, err)
+			}
+			if isNullable != tt.isNullable {
+				t.Fatalf("%s.%s is_nullable = %q, want %q", tt.table, tt.column, isNullable, tt.isNullable)
+			}
+		})
+	}
+}
+
+// TestMigration00006PreservesEvaluationsUniqueConstraint covers *UNIQUE
+// (tenant_id, interaction_event_id) constraint is preserved*: a second
+// evaluation insert for the same (tenant_id, interaction_event_id) pair
+// must still fail after migration 00006 applies.
+func TestMigration00006PreservesEvaluationsUniqueConstraint(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL catalog check in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is required for PostgreSQL catalog check")
+	}
+
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	suffix := time.Now().Format("150405.000000000")
+	var tenantID string
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO tenants (slug, name, status) VALUES ($1, $1, 'active') RETURNING id
+	`, "mig6-unique-"+suffix).Scan(&tenantID); err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	var debtorID string
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO debtors (tenant_id, external_ref, display_name, timezone)
+		VALUES ($1, $2, $2, 'America/Mexico_City') RETURNING id
+	`, tenantID, "mig6-unique-debtor-"+suffix).Scan(&debtorID); err != nil {
+		t.Fatalf("create debtor: %v", err)
+	}
+	var interactionID string
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO interaction_events (tenant_id, debtor_id, channel, direction, status, occurred_at, debtor_timezone)
+		VALUES ($1, $2, 'phone', 'outbound', 'recorded', now(), 'America/Mexico_City') RETURNING id
+	`, tenantID, debtorID).Scan(&interactionID); err != nil {
+		t.Fatalf("create interaction: %v", err)
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO evaluations (tenant_id, interaction_event_id, overall_outcome) VALUES ($1, $2, 'pass')
+	`, tenantID, interactionID); err != nil {
+		t.Fatalf("first evaluation insert: %v", err)
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO evaluations (tenant_id, interaction_event_id, overall_outcome) VALUES ($1, $2, 'fail')
+	`, tenantID, interactionID)
+	if err == nil {
+		t.Fatal("expected second evaluation insert for the same (tenant_id, interaction_event_id) to fail")
+	}
+}
+
 func TestRestrictedAppRoleIsLeastPrivilege(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping PostgreSQL app role catalog check in short mode")
@@ -215,6 +328,7 @@ func TestRestrictedAppRoleIsLeastPrivilege(t *testing.T) {
 		"detector_result_rows",
 		"evidence_records",
 		"ledger_chain_heads",
+		"interaction_transcripts",
 	} {
 		t.Run(table, func(t *testing.T) {
 			var canSelect bool

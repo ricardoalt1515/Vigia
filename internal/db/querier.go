@@ -17,6 +17,7 @@ type Querier interface {
 	CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (CreateDetectorResultRowRow, error)
 	CreateEvaluation(ctx context.Context, arg CreateEvaluationParams) (Evaluation, error)
 	CreateInteractionEvent(ctx context.Context, arg CreateInteractionEventParams) (CreateInteractionEventRow, error)
+	CreateInteractionTranscript(ctx context.Context, arg CreateInteractionTranscriptParams) (InteractionTranscript, error)
 	CreatePolicyBundle(ctx context.Context, arg CreatePolicyBundleParams) (PolicyBundle, error)
 	CreatePolicyRule(ctx context.Context, arg CreatePolicyRuleParams) (PolicyRule, error)
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
@@ -30,6 +31,7 @@ type Querier interface {
 	// Evidence export lookup (issue #3): fetch a single interaction scoped to
 	// its tenant.
 	GetInteractionEventByID(ctx context.Context, arg GetInteractionEventByIDParams) (GetInteractionEventByIDRow, error)
+	GetInteractionTranscriptByInteraction(ctx context.Context, arg GetInteractionTranscriptByInteractionParams) (InteractionTranscript, error)
 	GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error)
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
 	InsertEvidenceRecord(ctx context.Context, arg InsertEvidenceRecordParams) (EvidenceRecord, error)

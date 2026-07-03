@@ -25,7 +25,8 @@ func (q *Queries) CountOutOfHoursEvaluations(ctx context.Context) (int64, error)
 const createEvaluation = `-- name: CreateEvaluation :one
 INSERT INTO evaluations (tenant_id, interaction_event_id, overall_outcome)
 VALUES ($1, $2, $3)
-RETURNING id, tenant_id, interaction_event_id, overall_outcome, policy_bundle_version, created_at
+RETURNING id, tenant_id, interaction_event_id, overall_outcome, policy_bundle_version,
+    created_at, requires_hitl, judge_model_id, rubric_version
 `
 
 type CreateEvaluationParams struct {
@@ -44,12 +45,16 @@ func (q *Queries) CreateEvaluation(ctx context.Context, arg CreateEvaluationPara
 		&i.OverallOutcome,
 		&i.PolicyBundleVersion,
 		&i.CreatedAt,
+		&i.RequiresHitl,
+		&i.JudgeModelID,
+		&i.RubricVersion,
 	)
 	return i, err
 }
 
 const getEvaluationByInteractionEventID = `-- name: GetEvaluationByInteractionEventID :one
-SELECT id, tenant_id, interaction_event_id, overall_outcome, policy_bundle_version, created_at
+SELECT id, tenant_id, interaction_event_id, overall_outcome, policy_bundle_version,
+    created_at, requires_hitl, judge_model_id, rubric_version
 FROM evaluations
 WHERE tenant_id = $1 AND interaction_event_id = $2
 `
@@ -71,6 +76,9 @@ func (q *Queries) GetEvaluationByInteractionEventID(ctx context.Context, arg Get
 		&i.OverallOutcome,
 		&i.PolicyBundleVersion,
 		&i.CreatedAt,
+		&i.RequiresHitl,
+		&i.JudgeModelID,
+		&i.RubricVersion,
 	)
 	return i, err
 }
