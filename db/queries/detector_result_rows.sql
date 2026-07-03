@@ -1,10 +1,10 @@
 -- name: CreateDetectorResultRow :one
-INSERT INTO detector_result_rows (tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at;
+INSERT INTO detector_result_rows (tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, confidence, score)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at, confidence, score;
 
 -- name: ListDetectorResultRowsByTenant :many
-SELECT id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at
+SELECT id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at, confidence, score
 FROM detector_result_rows
 WHERE tenant_id = $1
 ORDER BY created_at DESC;

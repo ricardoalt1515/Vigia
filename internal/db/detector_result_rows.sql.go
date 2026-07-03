@@ -12,19 +12,21 @@ import (
 )
 
 const createDetectorResultRow = `-- name: CreateDetectorResultRow :one
-INSERT INTO detector_result_rows (tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at
+INSERT INTO detector_result_rows (tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, confidence, score)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at, confidence, score
 `
 
 type CreateDetectorResultRowParams struct {
-	TenantID           pgtype.UUID `json:"tenant_id"`
-	InteractionEventID pgtype.UUID `json:"interaction_event_id"`
-	DetectorCode       string      `json:"detector_code"`
-	Outcome            string      `json:"outcome"`
-	Severity           string      `json:"severity"`
-	ResultPayload      []byte      `json:"result_payload"`
-	EvaluationID       pgtype.UUID `json:"evaluation_id"`
+	TenantID           pgtype.UUID    `json:"tenant_id"`
+	InteractionEventID pgtype.UUID    `json:"interaction_event_id"`
+	DetectorCode       string         `json:"detector_code"`
+	Outcome            string         `json:"outcome"`
+	Severity           string         `json:"severity"`
+	ResultPayload      []byte         `json:"result_payload"`
+	EvaluationID       pgtype.UUID    `json:"evaluation_id"`
+	Confidence         pgtype.Numeric `json:"confidence"`
+	Score              pgtype.Numeric `json:"score"`
 }
 
 type CreateDetectorResultRowRow struct {
@@ -37,6 +39,8 @@ type CreateDetectorResultRowRow struct {
 	ResultPayload      []byte             `json:"result_payload"`
 	EvaluationID       pgtype.UUID        `json:"evaluation_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	Confidence         pgtype.Numeric     `json:"confidence"`
+	Score              pgtype.Numeric     `json:"score"`
 }
 
 func (q *Queries) CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (CreateDetectorResultRowRow, error) {
@@ -48,6 +52,8 @@ func (q *Queries) CreateDetectorResultRow(ctx context.Context, arg CreateDetecto
 		arg.Severity,
 		arg.ResultPayload,
 		arg.EvaluationID,
+		arg.Confidence,
+		arg.Score,
 	)
 	var i CreateDetectorResultRowRow
 	err := row.Scan(
@@ -60,12 +66,14 @@ func (q *Queries) CreateDetectorResultRow(ctx context.Context, arg CreateDetecto
 		&i.ResultPayload,
 		&i.EvaluationID,
 		&i.CreatedAt,
+		&i.Confidence,
+		&i.Score,
 	)
 	return i, err
 }
 
 const listDetectorResultRowsByTenant = `-- name: ListDetectorResultRowsByTenant :many
-SELECT id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at
+SELECT id, tenant_id, interaction_event_id, detector_code, outcome, severity, result_payload, evaluation_id, created_at, confidence, score
 FROM detector_result_rows
 WHERE tenant_id = $1
 ORDER BY created_at DESC
@@ -81,6 +89,8 @@ type ListDetectorResultRowsByTenantRow struct {
 	ResultPayload      []byte             `json:"result_payload"`
 	EvaluationID       pgtype.UUID        `json:"evaluation_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	Confidence         pgtype.Numeric     `json:"confidence"`
+	Score              pgtype.Numeric     `json:"score"`
 }
 
 func (q *Queries) ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDetectorResultRowsByTenantRow, error) {
@@ -102,6 +112,8 @@ func (q *Queries) ListDetectorResultRowsByTenant(ctx context.Context, tenantID p
 			&i.ResultPayload,
 			&i.EvaluationID,
 			&i.CreatedAt,
+			&i.Confidence,
+			&i.Score,
 		); err != nil {
 			return nil, err
 		}

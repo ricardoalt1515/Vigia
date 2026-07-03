@@ -3,12 +3,14 @@ package evaluation_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ricardoalt1515/vigia/internal/core"
 	"github.com/ricardoalt1515/vigia/internal/detection"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
+	"github.com/ricardoalt1515/vigia/internal/judge"
 )
 
 // fakeDetector returns a canned detection.Result regardless of input.
@@ -192,4 +194,263 @@ func TestServiceEvaluateInteraction(t *testing.T) {
 			t.Fatal("expected error from store to propagate")
 		}
 	})
+}
+
+// slowJudge blocks until ctx is done or its delay elapses, whichever comes
+// first, for exercising the *Judge timeout sets requires_hitl, never a
+// silent pass* scenario without a real network or clock dependency.
+type slowJudge struct{ delay time.Duration }
+
+func (s slowJudge) Evaluate(ctx context.Context, in judge.JudgeInput) (judge.JudgeResult, error) {
+	select {
+	case <-time.After(s.delay):
+		return judge.JudgeResult{Outcome: judge.OutcomePass, Confidence: 0.99}, nil
+	case <-ctx.Done():
+		return judge.JudgeResult{}, ctx.Err()
+	}
+}
+
+// thresholdJudge is a minimal test double that makes its own HITL-threshold
+// decision (mirroring where AnthropicJudge/FakeJudge decide it), so the
+// *HITL threshold is configurable without a code change* scenario can prove
+// evaluation.Service's fail-closed folding reacts correctly to whichever
+// threshold the Judge implementation used — without evaluation.Service
+// itself knowing about threshold values.
+type thresholdJudge struct {
+	confidence float64
+	threshold  float64
+}
+
+func (j thresholdJudge) Evaluate(_ context.Context, _ judge.JudgeInput) (judge.JudgeResult, error) {
+	if j.confidence < j.threshold {
+		return judge.JudgeResult{}, judge.ErrLowConfidence
+	}
+	return judge.JudgeResult{Outcome: judge.OutcomePass, Confidence: j.confidence}, nil
+}
+
+func passingDetectorService(store evaluation.EvaluationStore, judges ...evaluation.NamedJudge) evaluation.Service {
+	return evaluation.Service{
+		Detectors: []evaluation.NamedDetector{
+			{Code: "contact-hours", Detector: fakeDetector{result: detection.Result{Outcome: detection.OutcomePass, Rationale: "inside window"}}},
+		},
+		Judges: judges,
+		Store:  store,
+	}
+}
+
+func evaluateWithJudge(t *testing.T, ctx context.Context, svc evaluation.Service) (core.Evaluation, *fakeEvaluationStore) {
+	t.Helper()
+	store := svc.Store.(*fakeEvaluationStore)
+	got, err := svc.EvaluateInteraction(ctx, evaluation.EvaluateInteractionInput{
+		TenantID:           "tenant-a",
+		InteractionEventID: "interaction-judge",
+		Interaction: detection.Interaction{
+			OccurredAt:     time.Date(2026, 6, 15, 14, 30, 0, 0, time.UTC),
+			DebtorTimezone: "America/Mexico_City",
+		},
+		Utterances: []judge.Utterance{{Speaker: "agent", Text: "Le recordamos su pago."}},
+	})
+	if err != nil {
+		t.Fatalf("EvaluateInteraction returned unexpected error: %v", err)
+	}
+	return got, store
+}
+
+// TestServiceJudgeTimeoutSetsRequiresHITLNeverSilentPass covers *Judge
+// timeout sets requires_hitl, never a silent pass*.
+func TestServiceJudgeTimeoutSetsRequiresHITLNeverSilentPass(t *testing.T) {
+	store := &fakeEvaluationStore{}
+	svc := passingDetectorService(store, evaluation.NamedJudge{Code: "MX-REDECO-05", Judge: slowJudge{delay: 200 * time.Millisecond}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, store = evaluateWithJudge(t, ctx, svc)
+
+	call := store.calls[0]
+	if !call.RequiresHITL {
+		t.Fatal("RequiresHITL = false, want true after a judge timeout")
+	}
+	if call.OverallOutcome == "pass" {
+		t.Fatalf("OverallOutcome = %q, want it not to be a silent pass after a judge timeout", call.OverallOutcome)
+	}
+	if !judgeRowRationaleContains(call, "timed out") && !judgeRowRationaleContains(call, "deadline") {
+		t.Fatalf("no MX-REDECO-05 detector result row rationale mentions the timeout: %+v", call.DetectorResults)
+	}
+}
+
+// TestServiceJudgeTransportErrorSetsRequiresHITL covers *Judge transport
+// error sets requires_hitl*.
+func TestServiceJudgeTransportErrorSetsRequiresHITL(t *testing.T) {
+	store := &fakeEvaluationStore{}
+	svc := passingDetectorService(store, evaluation.NamedJudge{Code: "MX-REDECO-05", Judge: judge.FakeJudge{ForceErr: true}})
+
+	_, store = evaluateWithJudge(t, context.Background(), svc)
+
+	call := store.calls[0]
+	if !call.RequiresHITL {
+		t.Fatal("RequiresHITL = false, want true after a judge transport error")
+	}
+	if !judgeRowRationaleContains(call, "transport") {
+		t.Fatalf("no MX-REDECO-05 detector result row rationale references the transport failure: %+v", call.DetectorResults)
+	}
+}
+
+// TestServiceMalformedJudgeOutputSetsRequiresHITLNeverPass covers
+// *Malformed judge output sets requires_hitl, never a pass*.
+func TestServiceMalformedJudgeOutputSetsRequiresHITLNeverPass(t *testing.T) {
+	store := &fakeEvaluationStore{}
+	svc := passingDetectorService(store, evaluation.NamedJudge{Code: "MX-REDECO-05", Judge: judge.FakeJudge{ForceMalformed: true}})
+
+	got, store := evaluateWithJudge(t, context.Background(), svc)
+
+	call := store.calls[0]
+	if !call.RequiresHITL {
+		t.Fatal("RequiresHITL = false, want true after malformed judge output")
+	}
+	if got.OverallOutcome == "pass" || call.OverallOutcome == "pass" {
+		t.Fatalf("OverallOutcome = %q, want it not to be PASS after malformed judge output", call.OverallOutcome)
+	}
+	if !judgeRowRationaleContains(call, "malformed") && !judgeRowRationaleContains(call, "invalid") {
+		t.Fatalf("no MX-REDECO-05 detector result row rationale states malformed/invalid: %+v", call.DetectorResults)
+	}
+}
+
+// TestServiceLowConfidenceSetsRequiresHITL covers *Confidence below
+// threshold sets requires_hitl*.
+func TestServiceLowConfidenceSetsRequiresHITL(t *testing.T) {
+	store := &fakeEvaluationStore{}
+	svc := passingDetectorService(store, evaluation.NamedJudge{Code: "MX-REDECO-05", Judge: thresholdJudge{confidence: 0.5, threshold: 0.75}})
+
+	_, store = evaluateWithJudge(t, context.Background(), svc)
+
+	call := store.calls[0]
+	if !call.RequiresHITL {
+		t.Fatal("RequiresHITL = false, want true when confidence is below the configured threshold")
+	}
+	if !judgeRowRationaleContains(call, "threshold") && !judgeRowRationaleContains(call, "confidence") {
+		t.Fatalf("no MX-REDECO-05 detector result row rationale states below-threshold: %+v", call.DetectorResults)
+	}
+}
+
+// TestServiceConfidentBlockIsHardBlockAndRequiresHITL covers *Confident
+// threat verdict is a HARD BLOCK and also sets requires_hitl*.
+func TestServiceConfidentBlockIsHardBlockAndRequiresHITL(t *testing.T) {
+	store := &fakeEvaluationStore{}
+	svc := passingDetectorService(store, evaluation.NamedJudge{
+		Code: "MX-REDECO-05",
+		Judge: fixedJudge{result: judge.JudgeResult{
+			Outcome: judge.OutcomeBlock, Confidence: 0.95, Rationale: "threatening language",
+			RubricVersion: judge.RubricVersion, JudgeModelID: "fake-model",
+		}},
+	})
+
+	got, store := evaluateWithJudge(t, context.Background(), svc)
+
+	if got.OverallOutcome != "fail" {
+		t.Fatalf("OverallOutcome = %q, want fail (HARD BLOCK) for a confident threat verdict", got.OverallOutcome)
+	}
+	call := store.calls[0]
+	if !call.RequiresHITL {
+		t.Fatal("RequiresHITL = false, want true even for a confident HARD BLOCK (MX-REDECO-05 mandates human review)")
+	}
+	if call.JudgeModelID != "fake-model" || call.RubricVersion != judge.RubricVersion {
+		t.Fatalf("call = %+v, want JudgeModelID/RubricVersion echoed from the judge result", call)
+	}
+	if call.JudgeConfidence == nil || *call.JudgeConfidence != 0.95 {
+		t.Fatalf("JudgeConfidence = %v, want 0.95", call.JudgeConfidence)
+	}
+}
+
+// TestServiceConfidentPassDoesNotSetRequiresHITL covers *Confident neutral
+// verdict passes without requires_hitl*.
+func TestServiceConfidentPassDoesNotSetRequiresHITL(t *testing.T) {
+	store := &fakeEvaluationStore{}
+	svc := passingDetectorService(store, evaluation.NamedJudge{
+		Code: "MX-REDECO-05",
+		Judge: fixedJudge{result: judge.JudgeResult{
+			Outcome: judge.OutcomePass, Confidence: 0.9, Rationale: "neutral reminder",
+			RubricVersion: judge.RubricVersion, JudgeModelID: "fake-model",
+		}},
+	})
+
+	got, store := evaluateWithJudge(t, context.Background(), svc)
+
+	if got.OverallOutcome != "pass" {
+		t.Fatalf("OverallOutcome = %q, want pass (unblocked by the judge step)", got.OverallOutcome)
+	}
+	if store.calls[0].RequiresHITL {
+		t.Fatal("RequiresHITL = true, want false from the judge step alone for a confident pass")
+	}
+}
+
+// TestServiceHITLThresholdConfigurableWithoutCodeChange covers *HITL
+// threshold is configurable without a code change*.
+func TestServiceHITLThresholdConfigurableWithoutCodeChange(t *testing.T) {
+	const fixedConfidence = 0.8
+
+	highThresholdStore := &fakeEvaluationStore{}
+	highThresholdSvc := passingDetectorService(highThresholdStore, evaluation.NamedJudge{
+		Code: "MX-REDECO-05", Judge: thresholdJudge{confidence: fixedConfidence, threshold: 0.9},
+	})
+	_, highThresholdStore = evaluateWithJudge(t, context.Background(), highThresholdSvc)
+	if !highThresholdStore.calls[0].RequiresHITL {
+		t.Fatal("RequiresHITL = false under the higher threshold, want true (same confidence, no source change)")
+	}
+
+	lowThresholdStore := &fakeEvaluationStore{}
+	lowThresholdSvc := passingDetectorService(lowThresholdStore, evaluation.NamedJudge{
+		Code: "MX-REDECO-05", Judge: thresholdJudge{confidence: fixedConfidence, threshold: 0.5},
+	})
+	_, lowThresholdStore = evaluateWithJudge(t, context.Background(), lowThresholdSvc)
+	if lowThresholdStore.calls[0].RequiresHITL {
+		t.Fatal("RequiresHITL = true under the lower threshold, want false (same confidence, no source change)")
+	}
+}
+
+// TestServiceWiresJudgeAsDistinctTypedStep covers *Evaluation service wires
+// the judge as a distinct typed step* and *Deterministic fake judge
+// implements the same port*.
+func TestServiceWiresJudgeAsDistinctTypedStep(t *testing.T) {
+	store := &fakeEvaluationStore{}
+	fj := judge.FakeJudge{}
+	svc := passingDetectorService(store, evaluation.NamedJudge{Code: "MX-REDECO-05", Judge: fj})
+
+	_, store = evaluateWithJudge(t, context.Background(), svc)
+
+	call := store.calls[0]
+	// One detector row (contact-hours) + one judge row (MX-REDECO-05),
+	// proving the judge ran through its own typed step, not folded into
+	// the detector loop.
+	if len(call.DetectorResults) != 2 {
+		t.Fatalf("DetectorResults len = %d, want 2 (one detector + one judge)", len(call.DetectorResults))
+	}
+	var sawJudgeRow bool
+	for _, row := range call.DetectorResults {
+		if row.DetectorCode == "MX-REDECO-05" {
+			sawJudgeRow = true
+		}
+	}
+	if !sawJudgeRow {
+		t.Fatal("no detector result row carries the judge's MX-REDECO-05 code")
+	}
+}
+
+// fixedJudge returns a canned JudgeResult regardless of input.
+type fixedJudge struct{ result judge.JudgeResult }
+
+func (f fixedJudge) Evaluate(_ context.Context, _ judge.JudgeInput) (judge.JudgeResult, error) {
+	return f.result, nil
+}
+
+func judgeRowRationaleContains(call evaluation.CreateEvaluationInput, substr string) bool {
+	for _, row := range call.DetectorResults {
+		if row.DetectorCode != "MX-REDECO-05" {
+			continue
+		}
+		if strings.Contains(strings.ToLower(row.Rationale), strings.ToLower(substr)) {
+			return true
+		}
+	}
+	return false
 }

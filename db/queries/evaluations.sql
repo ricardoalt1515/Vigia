@@ -1,6 +1,7 @@
 -- name: CreateEvaluation :one
-INSERT INTO evaluations (tenant_id, interaction_event_id, overall_outcome)
-VALUES ($1, $2, $3)
+INSERT INTO evaluations (tenant_id, interaction_event_id, overall_outcome,
+    requires_hitl, judge_model_id, rubric_version)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, tenant_id, interaction_event_id, overall_outcome, policy_bundle_version,
     created_at, requires_hitl, judge_model_id, rubric_version;
 

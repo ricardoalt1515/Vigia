@@ -180,6 +180,21 @@ type detectorResultPayload struct {
 	Rationale string `json:"rationale"`
 }
 
+// numericFromFloatPtr converts an optional confidence/score float into the
+// numeric(5,4) column's pgtype.Numeric, formatted to 4 decimals to match the
+// same quantization the judge and the hashed evidence body use. A nil
+// pointer produces a SQL NULL (detector rows leave Confidence/Score nil).
+func numericFromFloatPtr(v *float64) (pgtype.Numeric, error) {
+	var n pgtype.Numeric
+	if v == nil {
+		return n, nil
+	}
+	if err := n.Scan(strconv.FormatFloat(*v, 'f', 4, 64)); err != nil {
+		return pgtype.Numeric{}, fmt.Errorf("scan numeric confidence/score: %w", err)
+	}
+	return n, nil
+}
+
 func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.CreateEvaluationInput) (core.Evaluation, error) {
 	tenantUUID, err := parseUUID(in.TenantID)
 	if err != nil {
@@ -198,6 +213,9 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			TenantID:           tenantUUID,
 			InteractionEventID: interactionUUID,
 			OverallOutcome:     in.OverallOutcome,
+			RequiresHitl:       in.RequiresHITL,
+			JudgeModelID:       in.JudgeModelID,
+			RubricVersion:      in.RubricVersion,
 		})
 		if err != nil {
 			return err
@@ -209,6 +227,14 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			if err != nil {
 				return err
 			}
+			confidence, err := numericFromFloatPtr(dr.Confidence)
+			if err != nil {
+				return err
+			}
+			score, err := numericFromFloatPtr(dr.Score)
+			if err != nil {
+				return err
+			}
 			if _, err := q.CreateDetectorResultRow(ctx, vigiaDB.CreateDetectorResultRowParams{
 				TenantID:           tenantUUID,
 				InteractionEventID: interactionUUID,
@@ -217,6 +243,8 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 				Severity:           string(dr.Severity),
 				ResultPayload:      payload,
 				EvaluationID:       pgtype.UUID{Bytes: header.ID.Bytes, Valid: true},
+				Confidence:         confidence,
+				Score:              score,
 			}); err != nil {
 				return err
 			}
