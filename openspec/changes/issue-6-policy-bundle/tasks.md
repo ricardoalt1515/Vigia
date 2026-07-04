@@ -136,7 +136,7 @@ Satisfies: *Policy Bundles and Rule Snapshots Are Append-Only*
 (`[integration]` half), *Evaluations Are Stamped With the Resolved Bundle
 Version* (`[integration]` half).
 
-- [ ] 3.1 [integration] Write
+- [x] 3.1 [integration] Write
       `internal/postgres/policy_bundle_integration_test.go`
       (`testing.Short()` skip, requires `DATABASE_URL`) before
       `CreateBundleVersion` exists, covering: owner-conn direct `UPDATE`
@@ -147,20 +147,20 @@ Version* (`[integration]` half).
       `policy_bundle_rules` fails; owner-conn `TRUNCATE policy_bundles`
       and `TRUNCATE policy_bundle_rules` both fail, rows intact after the
       failed attempt.
-- [ ] 3.2 [integration] Extend the same file: `CreateBundleVersion` called
+- [x] 3.2 [integration] Extend the same file: `CreateBundleVersion` called
       twice for the same `(tenant, name)` produces two bundle rows, the
       prior marked `superseded`, both rule-snapshot sets intact and
       queryable, `effective_date`/`legal_basis` non-null on the new rows.
-- [ ] 3.3 [integration] Add a concurrency case: two goroutines call
+- [x] 3.3 [integration] Add a concurrency case: two goroutines call
       `CreateBundleVersion` concurrently for the same `(tenant, name)`;
       assert the `FOR UPDATE` lock serializes them, exactly one resulting
       active row, no duplicate `(tenant_id, name, version)`.
-- [ ] 3.4 [integration] Add a stamping + RLS case: evaluate an interaction
+- [x] 3.4 [integration] Add a stamping + RLS case: evaluate an interaction
       for a tenant with an active bundle ⇒ `evaluations.policy_bundle_id`
       set and version non-empty, evidence hash incorporates the real
       version; tenant A cannot resolve tenant B's bundle via
       `BundleResolver`.
-- [ ] 3.5 Implement `CreateBundleVersion(ctx, tenantID, name, rules)
+- [x] 3.5 Implement `CreateBundleVersion(ctx, tenantID, name, rules)
       (core.PolicyBundle, error)` in `internal/postgres/adapters.go`: one
       tenant tx — `SELECT ... FOR UPDATE` the prior active row scoped to
       `(tenant_id, name)`, `UPDATE` it to `superseded` FIRST, THEN `INSERT`

@@ -61,9 +61,21 @@ type Querier interface {
 	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListInteractionEventsByTenantRow, error)
 	ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListPolicyBundleRulesByTenantRow, error)
 	ListTenantAPIKeysByTenant(ctx context.Context, tenantID pgtype.UUID) ([]TenantApiKey, error)
+	// CreateBundleVersion's serialization point (Design Decision 6): locks the
+	// prior active row scoped to (tenant_id, name) so two concurrent
+	// CreateBundleVersion calls for the same bundle name never both supersede
+	// and insert at once. Returns pgx.ErrNoRows when no prior active bundle
+	// exists yet (the first version for this name) — the caller proceeds
+	// without a row to supersede.
+	LockActivePolicyBundle(ctx context.Context, arg LockActivePolicyBundleParams) (PolicyBundle, error)
 	// Insert-or-lock: first append inserts the genesis head; later appends take the
 	// row lock via the no-op self-update. Either way returns the locked head.
 	LockChainHead(ctx context.Context, arg LockChainHeadParams) (LockChainHeadRow, error)
+	// Status-only update along the allowed active->superseded transition (the
+	// one carve-out policy_bundles_guard_mutation permits). MUST run before the
+	// new active row is inserted: the partial unique index
+	// policy_bundles_one_active_per_tenant_name is non-deferrable.
+	SupersedePolicyBundle(ctx context.Context, arg SupersedePolicyBundleParams) error
 	UpdateChainHead(ctx context.Context, arg UpdateChainHeadParams) error
 }
 

@@ -665,3 +665,121 @@ func (r *BundleResolverAdapter) ActiveBundle(ctx context.Context, tenantID strin
 }
 
 var _ evaluation.BundleResolver = (*BundleResolverAdapter)(nil)
+
+// BundleRuleInput is one rule snapshot to attach to a new bundle version via
+// CreateBundleVersion: PolicyRuleID identifies the (already-existing)
+// policy_rules row, EffectiveDate/LegalBasis are the issue #6 provenance
+// columns recorded on the policy_bundle_rules snapshot row.
+type BundleRuleInput struct {
+	PolicyRuleID  string
+	EffectiveDate time.Time
+	LegalBasis    string
+}
+
+// PolicyBundleStore creates new, immutable PolicyBundle versions
+// (CreateBundleVersion). Like cmd/seed and EvaluationStore's ledger writes,
+// it runs through the owner/migration role: vigia_app only has SELECT on
+// policy_bundles/policy_bundle_rules (00007_policy_bundle_versioning.sql).
+type PolicyBundleStore struct {
+	db tenantdb.Beginner
+}
+
+func NewPolicyBundleStore(db tenantdb.Beginner) *PolicyBundleStore {
+	return &PolicyBundleStore{db: db}
+}
+
+func NewPolicyBundleStoreFromPool(pool *pgxpool.Pool) *PolicyBundleStore {
+	return NewPolicyBundleStore(poolBeginner{pool: pool})
+}
+
+// CreateBundleVersion implements Design Decision 6: inside one tenant-scoped
+// transaction, it locks the prior active bundle row for (tenantID, name) via
+// LockActivePolicyBundle's SELECT ... FOR UPDATE (serializing concurrent
+// callers and version numbering), supersedes it FIRST if one exists, THEN
+// inserts the new active bundle (version vN, N = prior CountBundleVersions +
+// 1) and its rule-snapshot rows. Supersede-before-insert is mandatory: the
+// partial unique index policy_bundles_one_active_per_tenant_name is
+// non-deferrable, so inserting the new active row while the prior one is
+// still active would violate it on every ordinary edit.
+func (s *PolicyBundleStore) CreateBundleVersion(ctx context.Context, tenantID, name string, rules []BundleRuleInput) (core.PolicyBundle, error) {
+	tenantUUID, err := parseUUID(tenantID)
+	if err != nil {
+		return core.PolicyBundle{}, err
+	}
+
+	var result core.PolicyBundle
+	err = tenantdb.WithTenantTx(ctx, s.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		q := vigiaDB.New(tx)
+
+		prior, err := q.LockActivePolicyBundle(ctx, vigiaDB.LockActivePolicyBundleParams{
+			TenantID: tenantUUID,
+			Name:     name,
+		})
+		hasPrior := true
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				hasPrior = false
+			} else {
+				return err
+			}
+		}
+
+		count, err := q.CountBundleVersions(ctx, vigiaDB.CountBundleVersionsParams{
+			TenantID: tenantUUID,
+			Name:     name,
+		})
+		if err != nil {
+			return err
+		}
+
+		if hasPrior {
+			if err := q.SupersedePolicyBundle(ctx, vigiaDB.SupersedePolicyBundleParams{
+				ID:       prior.ID,
+				TenantID: tenantUUID,
+			}); err != nil {
+				return err
+			}
+		}
+
+		newVersion := fmt.Sprintf("v%d", count+1)
+		bundle, err := q.CreatePolicyBundle(ctx, vigiaDB.CreatePolicyBundleParams{
+			TenantID: tenantUUID,
+			Name:     name,
+			Version:  newVersion,
+			Status:   "active",
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, rule := range rules {
+			ruleUUID, err := parseUUID(rule.PolicyRuleID)
+			if err != nil {
+				return err
+			}
+			if _, err := q.AddPolicyBundleRule(ctx, vigiaDB.AddPolicyBundleRuleParams{
+				TenantID:       tenantUUID,
+				PolicyBundleID: bundle.ID,
+				PolicyRuleID:   ruleUUID,
+				EffectiveDate:  pgtype.Date{Time: rule.EffectiveDate, Valid: true},
+				LegalBasis:     rule.LegalBasis,
+			}); err != nil {
+				return err
+			}
+		}
+
+		result = core.PolicyBundle{
+			ID:        core.ID(uuidString(bundle.ID)),
+			TenantID:  core.ID(uuidString(bundle.TenantID)),
+			Name:      bundle.Name,
+			Version:   bundle.Version,
+			Status:    bundle.Status,
+			CreatedAt: bundle.CreatedAt.Time,
+		}
+		return nil
+	})
+	if err != nil {
+		return core.PolicyBundle{}, err
+	}
+	return result, nil
+}

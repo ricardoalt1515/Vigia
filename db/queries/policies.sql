@@ -36,3 +36,22 @@ WHERE tenant_id = $1 AND status = 'active';
 -- Scoped to (tenant_id, name): CreateBundleVersion numbers new versions per
 -- bundle name, not globally per tenant.
 SELECT count(*) FROM policy_bundles WHERE tenant_id = $1 AND name = $2;
+
+-- name: LockActivePolicyBundle :one
+-- CreateBundleVersion's serialization point (Design Decision 6): locks the
+-- prior active row scoped to (tenant_id, name) so two concurrent
+-- CreateBundleVersion calls for the same bundle name never both supersede
+-- and insert at once. Returns pgx.ErrNoRows when no prior active bundle
+-- exists yet (the first version for this name) — the caller proceeds
+-- without a row to supersede.
+SELECT id, tenant_id, name, version, status, created_at
+FROM policy_bundles
+WHERE tenant_id = $1 AND name = $2 AND status = 'active'
+FOR UPDATE;
+
+-- name: SupersedePolicyBundle :exec
+-- Status-only update along the allowed active->superseded transition (the
+-- one carve-out policy_bundles_guard_mutation permits). MUST run before the
+-- new active row is inserted: the partial unique index
+-- policy_bundles_one_active_per_tenant_name is non-deferrable.
+UPDATE policy_bundles SET status = 'superseded' WHERE id = $1 AND tenant_id = $2;

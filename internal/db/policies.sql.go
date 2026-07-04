@@ -205,3 +205,53 @@ func (q *Queries) ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pg
 	}
 	return items, nil
 }
+
+const lockActivePolicyBundle = `-- name: LockActivePolicyBundle :one
+SELECT id, tenant_id, name, version, status, created_at
+FROM policy_bundles
+WHERE tenant_id = $1 AND name = $2 AND status = 'active'
+FOR UPDATE
+`
+
+type LockActivePolicyBundleParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Name     string      `json:"name"`
+}
+
+// CreateBundleVersion's serialization point (Design Decision 6): locks the
+// prior active row scoped to (tenant_id, name) so two concurrent
+// CreateBundleVersion calls for the same bundle name never both supersede
+// and insert at once. Returns pgx.ErrNoRows when no prior active bundle
+// exists yet (the first version for this name) — the caller proceeds
+// without a row to supersede.
+func (q *Queries) LockActivePolicyBundle(ctx context.Context, arg LockActivePolicyBundleParams) (PolicyBundle, error) {
+	row := q.db.QueryRow(ctx, lockActivePolicyBundle, arg.TenantID, arg.Name)
+	var i PolicyBundle
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Name,
+		&i.Version,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const supersedePolicyBundle = `-- name: SupersedePolicyBundle :exec
+UPDATE policy_bundles SET status = 'superseded' WHERE id = $1 AND tenant_id = $2
+`
+
+type SupersedePolicyBundleParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+// Status-only update along the allowed active->superseded transition (the
+// one carve-out policy_bundles_guard_mutation permits). MUST run before the
+// new active row is inserted: the partial unique index
+// policy_bundles_one_active_per_tenant_name is non-deferrable.
+func (q *Queries) SupersedePolicyBundle(ctx context.Context, arg SupersedePolicyBundleParams) error {
+	_, err := q.db.Exec(ctx, supersedePolicyBundle, arg.ID, arg.TenantID)
+	return err
+}
