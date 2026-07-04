@@ -229,13 +229,23 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 	err = tenantdb.WithTenantTx(ctx, s.db, in.TenantID, func(ctx context.Context, tx tenantdb.Tx) error {
 		q := vigiaDB.New(tx)
 
+		var policyBundleID pgtype.UUID
+		if in.PolicyBundleID != nil {
+			policyBundleID, err = parseUUID(*in.PolicyBundleID)
+			if err != nil {
+				return err
+			}
+		}
+
 		header, err := q.CreateEvaluation(ctx, vigiaDB.CreateEvaluationParams{
-			TenantID:           tenantUUID,
-			InteractionEventID: interactionUUID,
-			OverallOutcome:     in.OverallOutcome,
-			RequiresHitl:       in.RequiresHITL,
-			JudgeModelID:       in.JudgeModelID,
-			RubricVersion:      in.RubricVersion,
+			TenantID:            tenantUUID,
+			InteractionEventID:  interactionUUID,
+			OverallOutcome:      in.OverallOutcome,
+			RequiresHitl:        in.RequiresHITL,
+			JudgeModelID:        in.JudgeModelID,
+			RubricVersion:       in.RubricVersion,
+			PolicyBundleVersion: in.PolicyBundleVersion,
+			PolicyBundleID:      policyBundleID,
 		})
 		if err != nil {
 			return err
@@ -361,12 +371,18 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			return err
 		}
 
+		var resultPolicyBundleID *core.ID
+		if header.PolicyBundleID.Valid {
+			id := core.ID(uuidString(header.PolicyBundleID))
+			resultPolicyBundleID = &id
+		}
 		result = core.Evaluation{
 			ID:                  core.ID(uuidString(header.ID)),
 			TenantID:            core.ID(uuidString(header.TenantID)),
 			InteractionEventID:  core.ID(uuidString(header.InteractionEventID)),
 			OverallOutcome:      header.OverallOutcome,
 			PolicyBundleVersion: header.PolicyBundleVersion,
+			PolicyBundleID:      resultPolicyBundleID,
 			CreatedAt:           header.CreatedAt.Time,
 		}
 		return nil
@@ -602,3 +618,50 @@ func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {
 		Hash:     row.Hash,
 	}
 }
+
+// BundleResolverAdapter resolves a tenant's active PolicyBundle via
+// GetActiveBundleByTenant (issue #6), implementing evaluation.BundleResolver.
+// It runs inside a tenant-scoped transaction so RLS enforces tenant
+// isolation: tenant A can never resolve tenant B's bundle even if it calls
+// with tenant B's id (RLS scopes the row set before the query predicate).
+type BundleResolverAdapter struct {
+	db tenantdb.Beginner
+}
+
+func NewBundleResolverAdapter(db tenantdb.Beginner) *BundleResolverAdapter {
+	return &BundleResolverAdapter{db: db}
+}
+
+func NewBundleResolverAdapterFromPool(pool *pgxpool.Pool) *BundleResolverAdapter {
+	return NewBundleResolverAdapter(poolBeginner{pool: pool})
+}
+
+// ActiveBundle returns found=false (never an error) when no active bundle
+// exists for the tenant — a missing bundle is an expected, non-exceptional
+// state (Design Decision 3), not a resolver failure.
+func (r *BundleResolverAdapter) ActiveBundle(ctx context.Context, tenantID string) (version, id string, found bool, err error) {
+	tenantUUID, err := parseUUID(tenantID)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	err = tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		bundle, err := vigiaDB.New(tx).GetActiveBundleByTenant(ctx, tenantUUID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		version = bundle.Version
+		id = uuidString(bundle.ID)
+		found = true
+		return nil
+	})
+	if err != nil {
+		return "", "", false, err
+	}
+	return version, id, found, nil
+}
+
+var _ evaluation.BundleResolver = (*BundleResolverAdapter)(nil)

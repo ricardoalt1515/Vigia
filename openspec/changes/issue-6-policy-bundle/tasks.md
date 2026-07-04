@@ -102,7 +102,7 @@ test ./internal/db/... -short` green.
 Satisfies: *Evaluations Are Stamped With the Resolved Bundle Version*
 (`[unit]` half).
 
-- [ ] 2.1 [unit] Write table-driven tests in `internal/evaluation` (extend
+- [x] 2.1 [unit] Write table-driven tests in `internal/evaluation` (extend
       or create `service_bundle_test.go`) before implementing: fake
       `BundleResolver` returning `(version, id, found=true, nil)` ⇒
       `CreateEvaluationInput.PolicyBundleVersion`/`PolicyBundleID` carry
@@ -110,16 +110,16 @@ Satisfies: *Evaluations Are Stamped With the Resolved Bundle Version*
       (nil-safe, no panic); resolver error ⇒ evaluation still proceeds
       with sentinel values (per design Decision 3, evaluation must not
       hard-fail on a missing/erroring bundle).
-- [ ] 2.2 Add `BundleResolver` interface to `internal/evaluation`:
+- [x] 2.2 Add `BundleResolver` interface to `internal/evaluation`:
       `ActiveBundle(ctx, tenantID) (version, id string, found bool, err
       error)`. Add `Resolver BundleResolver` field to `Service`. Modify
       `internal/core/types.go`: `Evaluation.PolicyBundleID *string`,
       `PolicyBundleRule.{EffectiveDate, LegalBasis}`.
-- [ ] 2.3 Wire the resolver call into `EvaluateInteraction` before
+- [x] 2.3 Wire the resolver call into `EvaluateInteraction` before
       `CreateEvaluation`: nil resolver or error or `found=false` ⇒ keep
       existing `""`/`nil` sentinel path unchanged (existing pre-#6 unit
       tests must stay green with no resolver configured).
-- [ ] 2.4 Implement the `BundleResolver` Postgres adapter in
+- [x] 2.4 Implement the `BundleResolver` Postgres adapter in
       `internal/postgres/adapters.go` backed by `GetActiveBundleByTenant`.
       Pass `PolicyBundleVersion`/`PolicyBundleID` through to
       `CreateEvaluation`'s new params (Work Unit 1.5).

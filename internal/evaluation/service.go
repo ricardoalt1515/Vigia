@@ -70,6 +70,21 @@ type CreateEvaluationInput struct {
 	JudgeModelID    string
 	RubricVersion   string
 	JudgeConfidence *float64
+
+	// PolicyBundleVersion and PolicyBundleID are issue #6 additions: the
+	// resolved active bundle's version string + FK id, stamped by
+	// EvaluateInteraction via Service.Resolver. Empty string/nil reproduce
+	// today's no-active-bundle sentinel exactly (Design Decision 3).
+	PolicyBundleVersion string
+	PolicyBundleID      *string
+}
+
+// BundleResolver resolves the current active PolicyBundle for a tenant.
+// found=false (no active bundle) and a nil Service.Resolver both keep the
+// existing empty-string/nil sentinel path unchanged (Design Decision 3/4):
+// evaluation must never hard-fail solely because no bundle is configured.
+type BundleResolver interface {
+	ActiveBundle(ctx context.Context, tenantID string) (version, id string, found bool, err error)
 }
 
 // EvaluationStore persists an evaluation. Implementations (internal/postgres)
@@ -109,6 +124,12 @@ type Service struct {
 	// JudgeInput. Zero value is safe when no Judges are configured.
 	Rubric judge.Rubric
 	Store  EvaluationStore
+
+	// Resolver resolves the tenant's active PolicyBundle for stamping
+	// (issue #6). Nil is safe: no stamping occurs, reproducing the exact
+	// pre-#6 sentinel behavior so existing table-driven tests stay green
+	// with no resolver configured (Design Decision 4).
+	Resolver BundleResolver
 }
 
 // judgeFailureRationale renders a fail-closed rationale that names the
@@ -227,14 +248,33 @@ func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteraction
 		judgeConfidence = &confidence
 	}
 
+	policyBundleVersion, policyBundleID := s.resolveActiveBundle(ctx, in.TenantID)
+
 	return s.Store.CreateEvaluation(ctx, CreateEvaluationInput{
-		TenantID:           in.TenantID,
-		InteractionEventID: in.InteractionEventID,
-		OverallOutcome:     overallOutcome,
-		DetectorResults:    results,
-		RequiresHITL:       requiresHITL,
-		JudgeModelID:       judgeModelID,
-		RubricVersion:      rubricVersion,
-		JudgeConfidence:    judgeConfidence,
+		TenantID:            in.TenantID,
+		InteractionEventID:  in.InteractionEventID,
+		OverallOutcome:      overallOutcome,
+		DetectorResults:     results,
+		RequiresHITL:        requiresHITL,
+		JudgeModelID:        judgeModelID,
+		RubricVersion:       rubricVersion,
+		JudgeConfidence:     judgeConfidence,
+		PolicyBundleVersion: policyBundleVersion,
+		PolicyBundleID:      policyBundleID,
 	})
+}
+
+// resolveActiveBundle stamps the tenant's active bundle version + id via
+// s.Resolver, degrading to the existing ""/nil sentinel on a nil resolver,
+// not-found, or resolver error (Design Decision 3: a missing or erroring
+// bundle resolution must never hard-fail EvaluateInteraction).
+func (s Service) resolveActiveBundle(ctx context.Context, tenantID string) (version string, id *string) {
+	if s.Resolver == nil {
+		return "", nil
+	}
+	v, bundleID, found, err := s.Resolver.ActiveBundle(ctx, tenantID)
+	if err != nil || !found {
+		return "", nil
+	}
+	return v, &bundleID
 }
