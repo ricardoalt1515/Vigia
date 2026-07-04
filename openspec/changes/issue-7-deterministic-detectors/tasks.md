@@ -29,12 +29,12 @@ Chain strategy: pending
 
 ## Phase 1 (PR1): Despacho Registry + Detector-Input Schema
 
-- [ ] 1.1 Write migration `db/migrations/00008_deterministic_detectors.sql`: `despachos` table (id, tenant_id, external_ref, display_name), `UNIQUE(id,tenant_id)`, `UNIQUE(tenant_id,external_ref)`, RLS + grants (despacho-registry spec: RLS/cardinality scenarios).
-- [ ] 1.2 Add nullable `interaction_events.despacho_id` composite FK + index; nullable detector-input columns (`contact_party_relationship`, `contacted_party_dob` snapshot col, `authorized_channels text[]`, `payment_recipient`, `disclosure_provided`); `debtors.date_of_birth`.
-- [ ] 1.3 Add `Despacho` type to `internal/core/types.go` (ID, TenantID, ExternalRef, DisplayName) + new interaction/debtor fields.
-- [ ] 1.4 Add `db/queries/despachos.sql` CRUD + `make sqlc` regen.
-- [ ] 1.5 [integration] Test: despacho RLS isolation, 1:N cardinality, nullable-FK backward-compat, tenant-consistency FK rejection (despacho-registry scenarios).
-- [ ] 1.6 [unit] Test: `Despacho` round-trips via sqlc create/read.
+- [x] 1.1 Write migration `db/migrations/00008_deterministic_detectors.sql`: `despachos` table (id, tenant_id, external_ref, display_name), `UNIQUE(id,tenant_id)`, `UNIQUE(tenant_id,external_ref)`, RLS + grants (despacho-registry spec: RLS/cardinality scenarios).
+- [x] 1.2 Add nullable `interaction_events.despacho_id` composite FK + index; nullable detector-input columns (`contact_party_relationship`, `contacted_party_dob` snapshot col, `authorized_channels text[]`, `payment_recipient`, `disclosure_provided`); `debtors.date_of_birth`.
+- [x] 1.3 Add `Despacho` type to `internal/core/types.go` (ID, TenantID, ExternalRef, DisplayName) + new interaction/debtor fields.
+- [x] 1.4 Add `db/queries/despachos.sql` CRUD + `make sqlc` regen.
+- [x] 1.5 [integration] Test: despacho RLS isolation, 1:N cardinality, nullable-FK backward-compat, tenant-consistency FK rejection (despacho-registry scenarios).
+- [x] 1.6 [unit] Test: `Despacho` round-trips via sqlc create/read.
 
 ## Phase 2a (PR2a): Third-Party + Protected Population, Outcome/HITL Plumbing
 
@@ -61,7 +61,7 @@ Chain strategy: pending
 - [ ] 2c.1 [RED] Table-driven tests + `TestXNoIO` for disclosure detector (MX-REDECO-03): stated-pass, not-stated-warn, missing-warn (fail-closed to warn, not block).
 - [ ] 2c.2 [GREEN] Implement `internal/detection/disclosure.go`.
 - [ ] 2c.3 Rename `"contact-hours"` → `"MX-REDECO-04"` in `cmd/api/main.go`, `cmd/seed/main.go`, and `cmd/seed/devdata_integration_test.go` only.
-- [ ] 2c.4 Add `detector_code` backfill (forward + reversible `Down`) in migration 00008.
+- [x] 2c.4 Add `detector_code` backfill (forward + reversible `Down`) in migration 00008. (Completed in PR1: bundled into the single 00008 migration file per design.md's "Single migration 00008" rollout note — the Go-side rename in 2c.3 is still pending for PR2c.)
 - [ ] 2c.5 Add `UpsertPolicyRule` (`ON CONFLICT (code) DO UPDATE`) to `db/queries/policies.sql` + sqlc regen.
 - [ ] 2c.6 Implement `cmd/seed` seeding: all 7 rules via `UpsertPolicyRule`; one active `redeco-baseline` bundle via `CreateBundleVersion` guarded by `GetActiveBundleByTenant`; MX-REDECO-03 severity `medium`, others `high`.
 - [ ] 2c.7 [integration] Test: seed idempotency (re-run doesn't duplicate/error), all 7 catalog rows + bundle snapshot with `LegalBasis`/`EffectiveDate`.

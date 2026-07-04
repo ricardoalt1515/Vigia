@@ -76,6 +76,23 @@ type Debtor struct {
 	ExternalRef string
 	DisplayName string
 	Timezone    string
+	// DateOfBirth is the durable DOB source (issue #7), snapshotted onto
+	// InteractionEvent.ContactedPartyDOB at ingest. Nil for debtors that
+	// predate this field.
+	DateOfBirth *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// Despacho is a tenant-scoped attribution/scoping dimension: one tenant
+// (creditor) contracts N despachos (collection firms). Minimal identity
+// schema only -- no status lifecycle or contract fields (despacho-registry
+// spec's non-goals).
+type Despacho struct {
+	ID          ID
+	TenantID    ID
+	ExternalRef string
+	DisplayName string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -90,7 +107,27 @@ type InteractionEvent struct {
 	OccurredAt     time.Time
 	TranscriptRef  *string
 	DebtorTimezone string
-	CreatedAt      time.Time
+	// DespachoID is the optional despacho attribution FK (issue #7). Nil
+	// when the interaction has not been attributed to a despacho.
+	DespachoID *ID
+	// ContactPartyRelationship is the contacted party's relationship to the
+	// debtor ("debtor" | "authorized" | "third_party"), used by
+	// MX-REDECO-06/07. Nil means unresolved (detectors fail closed).
+	ContactPartyRelationship *string
+	// ContactedPartyDOB is the snapshot of the contacted party's date of
+	// birth at ingest (from Debtor.DateOfBirth), used by MX-REDECO-07.
+	ContactedPartyDOB *time.Time
+	// AuthorizedChannels is the per-interaction snapshot of channels the
+	// debtor authorized, used by MX-REDECO-11.
+	AuthorizedChannels []string
+	// PaymentRecipient identifies who the interaction directed payment to
+	// ("creditor" | other), used by MX-REDECO-10.
+	PaymentRecipient *string
+	// DisclosureProvided records whether the UNE/complaints-unit disclosure
+	// was stated, used by MX-REDECO-03. Nil fails closed to "warn" (not
+	// "block"), per that rule's WARN-level catalog action.
+	DisclosureProvided *bool
+	CreatedAt          time.Time
 }
 
 // Evaluation is the persisted header row proving a policy evaluation ran for
