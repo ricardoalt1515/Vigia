@@ -52,7 +52,7 @@ test-db: ## run all tests with local Postgres URLs exported
 	DATABASE_URL="$(DATABASE_URL)" APP_DATABASE_URL="$(APP_DATABASE_URL)" go test ./...
 
 eval-golden: ## run deterministic golden-set agreement gate
-	go run ./cmd/golden-eval
+	go run ./cmd/golden-eval -expected-judge-model-id fake-judge-v1 -expected-rubric-version mx-redeco-05.tone-threat.v1
 
 test-rls: ## run database-backed RLS isolation tests through the restricted app role
 	DATABASE_URL="$(DATABASE_URL)" APP_DATABASE_URL="$(APP_DATABASE_URL)" go test ./internal/db ./internal/postgres -run 'TestRestrictedAppRoleIsLeastPrivilege|TestRLSIsolationForCurrentTenantInteractions|TestEvaluationRLSIsolationAcrossTenants|TestEvidenceRLSIsolationAcrossTenants' -count=1
