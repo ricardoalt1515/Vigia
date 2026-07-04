@@ -12,6 +12,9 @@ import (
 
 type Querier interface {
 	AddPolicyBundleRule(ctx context.Context, arg AddPolicyBundleRuleParams) (PolicyBundleRule, error)
+	// Scoped to (tenant_id, name): CreateBundleVersion numbers new versions per
+	// bundle name, not globally per tenant.
+	CountBundleVersions(ctx context.Context, arg CountBundleVersionsParams) (int64, error)
 	CountOutOfHoursEvaluations(ctx context.Context) (int64, error)
 	CreateDebtor(ctx context.Context, arg CreateDebtorParams) (CreateDebtorRow, error)
 	CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (CreateDetectorResultRowRow, error)
@@ -22,6 +25,12 @@ type Querier interface {
 	CreatePolicyRule(ctx context.Context, arg CreatePolicyRuleParams) (PolicyRule, error)
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
 	CreateTenantAPIKey(ctx context.Context, arg CreateTenantAPIKeyParams) (TenantApiKey, error)
+	// Resolves THE active bundle for a tenant (Design Decision 3/4): today's
+	// BundleResolver seam resolves per-tenant only, with no bundle "name" input.
+	// If a tenant were to ever activate more than one named bundle
+	// simultaneously this returns a SQL "too many rows" error rather than
+	// silently picking one; that constraint is out of scope for issue #6.
+	GetActiveBundleByTenant(ctx context.Context, tenantID pgtype.UUID) (PolicyBundle, error)
 	GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantParams) (GetDebtorByTenantRow, error)
 	// Used by cmd/seed to detect whether a pre-existing (re-run) interaction
 	// still needs to be backfilled with an evaluation.

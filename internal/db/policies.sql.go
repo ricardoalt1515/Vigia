@@ -12,27 +12,55 @@ import (
 )
 
 const addPolicyBundleRule = `-- name: AddPolicyBundleRule :one
-INSERT INTO policy_bundle_rules (tenant_id, policy_bundle_id, policy_rule_id)
-VALUES ($1, $2, $3)
-RETURNING tenant_id, policy_bundle_id, policy_rule_id, created_at
+INSERT INTO policy_bundle_rules (tenant_id, policy_bundle_id, policy_rule_id, effective_date, legal_basis)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING tenant_id, policy_bundle_id, policy_rule_id, created_at, effective_date, legal_basis
 `
 
 type AddPolicyBundleRuleParams struct {
 	TenantID       pgtype.UUID `json:"tenant_id"`
 	PolicyBundleID pgtype.UUID `json:"policy_bundle_id"`
 	PolicyRuleID   pgtype.UUID `json:"policy_rule_id"`
+	EffectiveDate  pgtype.Date `json:"effective_date"`
+	LegalBasis     string      `json:"legal_basis"`
 }
 
 func (q *Queries) AddPolicyBundleRule(ctx context.Context, arg AddPolicyBundleRuleParams) (PolicyBundleRule, error) {
-	row := q.db.QueryRow(ctx, addPolicyBundleRule, arg.TenantID, arg.PolicyBundleID, arg.PolicyRuleID)
+	row := q.db.QueryRow(ctx, addPolicyBundleRule,
+		arg.TenantID,
+		arg.PolicyBundleID,
+		arg.PolicyRuleID,
+		arg.EffectiveDate,
+		arg.LegalBasis,
+	)
 	var i PolicyBundleRule
 	err := row.Scan(
 		&i.TenantID,
 		&i.PolicyBundleID,
 		&i.PolicyRuleID,
 		&i.CreatedAt,
+		&i.EffectiveDate,
+		&i.LegalBasis,
 	)
 	return i, err
+}
+
+const countBundleVersions = `-- name: CountBundleVersions :one
+SELECT count(*) FROM policy_bundles WHERE tenant_id = $1 AND name = $2
+`
+
+type CountBundleVersionsParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Name     string      `json:"name"`
+}
+
+// Scoped to (tenant_id, name): CreateBundleVersion numbers new versions per
+// bundle name, not globally per tenant.
+func (q *Queries) CountBundleVersions(ctx context.Context, arg CountBundleVersionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countBundleVersions, arg.TenantID, arg.Name)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createPolicyBundle = `-- name: CreatePolicyBundle :one
@@ -99,8 +127,34 @@ func (q *Queries) CreatePolicyRule(ctx context.Context, arg CreatePolicyRulePara
 	return i, err
 }
 
+const getActiveBundleByTenant = `-- name: GetActiveBundleByTenant :one
+SELECT id, tenant_id, name, version, status, created_at
+FROM policy_bundles
+WHERE tenant_id = $1 AND status = 'active'
+`
+
+// Resolves THE active bundle for a tenant (Design Decision 3/4): today's
+// BundleResolver seam resolves per-tenant only, with no bundle "name" input.
+// If a tenant were to ever activate more than one named bundle
+// simultaneously this returns a SQL "too many rows" error rather than
+// silently picking one; that constraint is out of scope for issue #6.
+func (q *Queries) GetActiveBundleByTenant(ctx context.Context, tenantID pgtype.UUID) (PolicyBundle, error) {
+	row := q.db.QueryRow(ctx, getActiveBundleByTenant, tenantID)
+	var i PolicyBundle
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Name,
+		&i.Version,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listPolicyBundleRulesByTenant = `-- name: ListPolicyBundleRulesByTenant :many
 SELECT pbr.tenant_id, pbr.policy_bundle_id, pbr.policy_rule_id, pbr.created_at,
+       pbr.effective_date, pbr.legal_basis,
        pr.code, pr.title, pr.description, pr.severity
 FROM policy_bundle_rules pbr
 JOIN policy_rules pr ON pr.id = pbr.policy_rule_id
@@ -113,6 +167,8 @@ type ListPolicyBundleRulesByTenantRow struct {
 	PolicyBundleID pgtype.UUID        `json:"policy_bundle_id"`
 	PolicyRuleID   pgtype.UUID        `json:"policy_rule_id"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	EffectiveDate  pgtype.Date        `json:"effective_date"`
+	LegalBasis     string             `json:"legal_basis"`
 	Code           string             `json:"code"`
 	Title          string             `json:"title"`
 	Description    string             `json:"description"`
@@ -133,6 +189,8 @@ func (q *Queries) ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pg
 			&i.PolicyBundleID,
 			&i.PolicyRuleID,
 			&i.CreatedAt,
+			&i.EffectiveDate,
+			&i.LegalBasis,
 			&i.Code,
 			&i.Title,
 			&i.Description,
