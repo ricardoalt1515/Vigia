@@ -253,14 +253,14 @@ Verification: `go test ./internal/httpapi/... -v` green; console
 Satisfies: no new scenario — confirms Work Units 1–3 do not break existing
 seed/demo data paths.
 
-- [ ] 7.1 [integration] Extend the seed integration test
+- [x] 7.1 [integration] Extend the seed integration test
       (`cmd/seed/devdata_test.go` or equivalent, `testing.Short()` skip):
       after `cmd/seed dev-data` runs against a fresh migrated database,
       seeded evaluations still succeed with no active bundle (sentinel
       `policy_bundle_version = ""`, `policy_bundle_id = NULL`), and
       existing evidence-ledger/golden-hash seed assertions remain
       unaffected.
-- [ ] 7.2 If `cmd/seed` directly inserts `policy_bundle_rules` rows,
+- [x] 7.2 If `cmd/seed` directly inserts `policy_bundle_rules` rows,
       update those call sites to supply `effective_date`/`legal_basis`
       (now `NOT NULL`) via the updated `AddPolicyBundleRule` query.
 

@@ -285,4 +285,42 @@ func TestSeedDevDataIntegration(t *testing.T) {
 			t.Fatalf("evidence_records seqs = %v, want contiguous 1..%d", seqs, len(seqs))
 		}
 	}
+
+	// Issue #6 compatibility: seed never configures a BundleResolver, so
+	// every seeded evaluation must keep the pre-#6 no-active-bundle sentinel
+	// — policy_bundle_version = "" and policy_bundle_id = NULL — and the
+	// evidence-ledger/golden-hash assertions above must remain unaffected by
+	// migration 00007's additive schema.
+	bundleRows, err := tx.Query(ctx, `
+		SELECT e.policy_bundle_version, e.policy_bundle_id
+		FROM evaluations e
+		WHERE e.interaction_event_id = ANY(
+			SELECT id FROM interaction_events WHERE tenant_id = $1
+		)
+	`, tenant.ID)
+	if err != nil {
+		t.Fatalf("query evaluations policy_bundle columns: %v", err)
+	}
+	defer bundleRows.Close()
+	bundleRowCount := 0
+	for bundleRows.Next() {
+		bundleRowCount++
+		var version string
+		var bundleID *string
+		if err := bundleRows.Scan(&version, &bundleID); err != nil {
+			t.Fatalf("scan evaluations policy_bundle columns: %v", err)
+		}
+		if version != "" {
+			t.Errorf("seeded evaluation policy_bundle_version = %q, want empty sentinel (no BundleResolver configured)", version)
+		}
+		if bundleID != nil {
+			t.Errorf("seeded evaluation policy_bundle_id = %v, want nil (no BundleResolver configured)", *bundleID)
+		}
+	}
+	if err := bundleRows.Err(); err != nil {
+		t.Fatalf("iterate evaluations policy_bundle columns: %v", err)
+	}
+	if bundleRowCount != outcomeCount {
+		t.Fatalf("evaluations rows with policy_bundle columns checked = %d, want %d", bundleRowCount, outcomeCount)
+	}
 }
