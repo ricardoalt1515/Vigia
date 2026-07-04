@@ -46,7 +46,7 @@ Satisfies: *Policy Bundles and Rule Snapshots Are Append-Only*, *Rule
 Snapshots Record Effective Date and Legal Basis*, *At Most One Active
 Bundle Per Tenant and Name* (schema half).
 
-- [ ] 1.1 Write `db/migrations/00007_policy_bundle_versioning.sql` Up, in
+- [x] 1.1 Write `db/migrations/00007_policy_bundle_versioning.sql` Up, in
       order: (a) `ALTER TABLE policy_bundle_rules ADD effective_date date`
       nullable, `ADD legal_basis text NOT NULL DEFAULT ''`; (b) backfill
       `UPDATE policy_bundle_rules SET effective_date = created_at::date`;
@@ -67,25 +67,25 @@ Bundle Per Tenant and Name* (schema half).
       policy_bundles, policy_bundle_rules TO vigia_app`. The guard triggers
       MUST be created AFTER the backfill (step b), not before, or the
       backfill's own UPDATE fails against its own guard.
-- [ ] 1.2 Write the Down migration: revoke grants, drop the partial unique
+- [x] 1.2 Write the Down migration: revoke grants, drop the partial unique
       index, drop the CHECK constraint, drop all four triggers + both
       trigger functions, drop the evaluations FK + index + column, drop
       `effective_date`/`legal_basis` columns.
-- [ ] 1.3 Run `make migrate-up` locally; verify no errors and existing
+- [x] 1.3 Run `make migrate-up` locally; verify no errors and existing
       seed/tests still pass against the migrated schema.
-- [ ] 1.4 Modify `db/queries/policies.sql`: update `AddPolicyBundleRule` to
+- [x] 1.4 Modify `db/queries/policies.sql`: update `AddPolicyBundleRule` to
       accept `effective_date`/`legal_basis` params; add
       `GetActiveBundleByTenant :one` and `CountBundleVersions :one`
       (scoped to `tenant_id, name`).
-- [ ] 1.5 Modify `db/queries/evaluations.sql`: `CreateEvaluation` INSERT +
+- [x] 1.5 Modify `db/queries/evaluations.sql`: `CreateEvaluation` INSERT +
       RETURNING gains `policy_bundle_version`, `policy_bundle_id`.
-- [ ] 1.6 Modify `db/queries/interaction_events.sql`:
+- [x] 1.6 Modify `db/queries/interaction_events.sql`:
       `ListCurrentTenantInteractionsWithOutcome` adds
       `e.policy_bundle_version` using the same `CASE WHEN e.id IS NULL
       THEN NULL ELSE ... END` convention as `threat_flagged`.
-- [ ] 1.7 Run `make sqlc` to regenerate `internal/db`; verify `go build
+- [x] 1.7 Run `make sqlc` to regenerate `internal/db`; verify `go build
       ./...` succeeds with the new generated types.
-- [ ] 1.8 [unit] Extend `internal/db/migration_test.go`'s grant-check table
+- [x] 1.8 [unit] Extend `internal/db/migration_test.go`'s grant-check table
       list with `policy_bundles`, `policy_bundle_rules`: assert both have
       non-null `tenant_id`, RLS enabled, `vigia_app` has SELECT and no
       write privileges, the CHECK constraint exists, the partial unique
