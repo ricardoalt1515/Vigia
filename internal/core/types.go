@@ -39,6 +39,12 @@ const (
 	DetectorOutcomePass   DetectorOutcome = "pass"
 	DetectorOutcomeReview DetectorOutcome = "review"
 	DetectorOutcomeFail   DetectorOutcome = "fail"
+
+	// DetectorOutcomeWarn is a confirmed, warn-level policy signal (e.g.
+	// MX-REDECO-03 disclosure presence) persisted on detector_result_rows.
+	// It never flips an evaluation's overall_outcome to "fail" by itself
+	// (see internal/evaluation/service.go's 3-way fold).
+	DetectorOutcomeWarn DetectorOutcome = "warn"
 )
 
 type Severity string
