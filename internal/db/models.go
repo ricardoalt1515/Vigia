@@ -67,6 +67,16 @@ type Debtor struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	Timezone    string             `json:"timezone"`
+	DateOfBirth pgtype.Date        `json:"date_of_birth"`
+}
+
+type Despacho struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	ExternalRef string             `json:"external_ref"`
+	DisplayName string             `json:"display_name"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type DetectorResultRow struct {
@@ -114,16 +124,22 @@ type EvidenceRecord struct {
 }
 
 type InteractionEvent struct {
-	ID             pgtype.UUID        `json:"id"`
-	TenantID       pgtype.UUID        `json:"tenant_id"`
-	DebtorID       pgtype.UUID        `json:"debtor_id"`
-	Channel        string             `json:"channel"`
-	Direction      string             `json:"direction"`
-	Status         string             `json:"status"`
-	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
-	TranscriptRef  *string            `json:"transcript_ref"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	DebtorTimezone string             `json:"debtor_timezone"`
+	ID                       pgtype.UUID        `json:"id"`
+	TenantID                 pgtype.UUID        `json:"tenant_id"`
+	DebtorID                 pgtype.UUID        `json:"debtor_id"`
+	Channel                  string             `json:"channel"`
+	Direction                string             `json:"direction"`
+	Status                   string             `json:"status"`
+	OccurredAt               pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef            *string            `json:"transcript_ref"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	DebtorTimezone           string             `json:"debtor_timezone"`
+	DespachoID               pgtype.UUID        `json:"despacho_id"`
+	ContactPartyRelationship *string            `json:"contact_party_relationship"`
+	ContactedPartyDob        pgtype.Date        `json:"contacted_party_dob"`
+	AuthorizedChannels       []string           `json:"authorized_channels"`
+	PaymentRecipient         *string            `json:"payment_recipient"`
+	DisclosureProvided       *bool              `json:"disclosure_provided"`
 }
 
 type InteractionTranscript struct {
