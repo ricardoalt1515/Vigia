@@ -3,10 +3,14 @@ import "server-only";
 // Canonical shape from GET /v1/interactions (internal/httpapi/httpapi.go):
 //   { "interactions": [ { "id", "occurred_at", "channel", "direction",
 //                          "outcome", "reason", "requires_hitl",
-//                          "threat_flagged" }, ... ] }
+//                          "threat_flagged", "policy_bundle_version" }, ... ] }
 // outcome/reason/requires_hitl/threat_flagged are null when the interaction
 // has not yet been evaluated — the API never fabricates a PASS/BLOCK
 // outcome or a false flag.
+// policy_bundle_version follows the same convention but with a third,
+// distinct state: null means no evaluation row exists yet; an empty string
+// means an evaluation ran but no PolicyBundle was active at the time; any
+// other string is the real stamped bundle version (issue #6).
 // The loader also tolerates a bare array for forward compatibility.
 export type Interaction = {
   id: string;
@@ -17,6 +21,7 @@ export type Interaction = {
   reason: string | null;
   requires_hitl: boolean | null;
   threat_flagged: boolean | null;
+  policy_bundle_version: string | null;
 };
 
 function apiConfig() {

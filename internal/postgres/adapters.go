@@ -98,14 +98,15 @@ func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID strin
 		items = make([]httpapi.Interaction, 0, len(rows))
 		for _, row := range rows {
 			items = append(items, httpapi.Interaction{
-				ID:            uuidString(row.ID),
-				OccurredAt:    row.OccurredAt.Time,
-				Channel:       row.Channel,
-				Direction:     row.Direction,
-				Outcome:       outcomeToAPI(row.OverallOutcome),
-				Reason:        reasonToAPI(row.Reason),
-				RequiresHITL:  row.RequiresHitl,
-				ThreatFlagged: threatFlaggedToAPI(row.ThreatFlagged),
+				ID:                  uuidString(row.ID),
+				OccurredAt:          row.OccurredAt.Time,
+				Channel:             row.Channel,
+				Direction:           row.Direction,
+				Outcome:             outcomeToAPI(row.OverallOutcome),
+				Reason:              reasonToAPI(row.Reason),
+				RequiresHITL:        row.RequiresHitl,
+				ThreatFlagged:       threatFlaggedToAPI(row.ThreatFlagged),
+				PolicyBundleVersion: policyBundleVersionToAPI(row.PolicyBundleVersion),
 			})
 		}
 		return nil
@@ -143,6 +144,26 @@ func reasonToAPI(reason any) *string {
 		return nil
 	}
 	switch v := reason.(type) {
+	case string:
+		return &v
+	case *string:
+		return v
+	default:
+		return nil
+	}
+}
+
+// policyBundleVersionToAPI narrows the sqlc-generated `interface{}` for the
+// CASE-guarded policy_bundle_version column (see
+// db/queries/interaction_events.sql) to *string: nil when the interaction
+// has no evaluation row at all, the stored (possibly empty-string sentinel)
+// value otherwise — the empty string is a real, distinct value, never
+// coerced to nil (issue #6, mirrors threatFlaggedToAPI's convention).
+func policyBundleVersionToAPI(policyBundleVersion any) *string {
+	if policyBundleVersion == nil {
+		return nil
+	}
+	switch v := policyBundleVersion.(type) {
 	case string:
 		return &v
 	case *string:

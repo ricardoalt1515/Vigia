@@ -198,3 +198,85 @@ func TestListInteractionsCarriesThreatHITLFlag(t *testing.T) {
 		t.Fatalf("RequiresHITL for unflagged interaction = %v (ok=%v), want false", hitl, ok)
 	}
 }
+
+// TestListInteractionsDistinguishesPolicyBundleVersionNullFromEmpty covers
+// *Console Surfaces the Judging Bundle Version* [integration]: an evaluated
+// interaction under a real bundle version surfaces that version string; an
+// unevaluated interaction surfaces nil (never a fabricated empty string);
+// an evaluated interaction with no active bundle at evaluation time
+// surfaces the empty-string sentinel, distinct from nil.
+func TestListInteractionsDistinguishesPolicyBundleVersionNullFromEmpty(t *testing.T) {
+	databaseURL := requireDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+
+	tenantID, debtorID := seedTenantAndDebtor(t, ctx, pool, "interq-bundleversion")
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO policy_bundles (tenant_id, name, version, status)
+		VALUES ($1, 'interq-bundleversion-policy', 'v2', 'active')
+	`, tenantID); err != nil {
+		t.Fatalf("seed active policy bundle: %v", err)
+	}
+
+	evaluatedWithBundleID := seedInteraction(t, ctx, pool, tenantID, debtorID, "interq/bundleversion/with-bundle")
+	unevaluatedID := seedInteraction(t, ctx, pool, tenantID, debtorID, "interq/bundleversion/unevaluated")
+	evaluatedNoBundleID := seedInteraction(t, ctx, pool, tenantID, debtorID, "interq/bundleversion/no-bundle")
+
+	resolver := postgres.NewBundleResolverAdapterFromPool(pool)
+	store := postgres.NewEvaluationStoreFromPool(pool)
+	svcWithResolver := evaluation.Service{
+		Detectors: []evaluation.NamedDetector{{Code: "contact-hours", Detector: passDetector{}}},
+		Store:     store,
+		Resolver:  resolver,
+	}
+	svcNoResolver := evaluation.Service{
+		Detectors: []evaluation.NamedDetector{{Code: "contact-hours", Detector: passDetector{}}},
+		Store:     store,
+	}
+
+	if _, err := svcWithResolver.EvaluateInteraction(ctx, evaluation.EvaluateInteractionInput{
+		TenantID:           tenantID,
+		InteractionEventID: evaluatedWithBundleID,
+		Interaction:        detection.Interaction{OccurredAt: time.Date(2026, 6, 15, 14, 0, 0, 0, time.UTC), DebtorTimezone: "America/Mexico_City"},
+	}); err != nil {
+		t.Fatalf("EvaluateInteraction (with bundle): %v", err)
+	}
+	if _, err := svcNoResolver.EvaluateInteraction(ctx, evaluation.EvaluateInteractionInput{
+		TenantID:           tenantID,
+		InteractionEventID: evaluatedNoBundleID,
+		Interaction:        detection.Interaction{OccurredAt: time.Date(2026, 6, 15, 14, 0, 0, 0, time.UTC), DebtorTimezone: "America/Mexico_City"},
+	}); err != nil {
+		t.Fatalf("EvaluateInteraction (no bundle): %v", err)
+	}
+
+	reader := postgres.NewInteractionReaderFromPool(pool)
+	items, err := reader.ListInteractions(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("ListInteractions: %v", err)
+	}
+
+	byID := map[string]*string{}
+	for _, item := range items {
+		byID[item.ID] = item.PolicyBundleVersion
+	}
+
+	withBundle, ok := byID[evaluatedWithBundleID]
+	if !ok || withBundle == nil || *withBundle != "v2" {
+		t.Fatalf("PolicyBundleVersion for evaluated-with-bundle interaction = %v (ok=%v), want pointer to v2", withBundle, ok)
+	}
+	unevaluated, ok := byID[unevaluatedID]
+	if !ok || unevaluated != nil {
+		t.Fatalf("PolicyBundleVersion for unevaluated interaction = %v (ok=%v), want nil", unevaluated, ok)
+	}
+	noBundle, ok := byID[evaluatedNoBundleID]
+	if !ok || noBundle == nil || *noBundle != "" {
+		t.Fatalf("PolicyBundleVersion for evaluated-no-bundle interaction = %v (ok=%v), want pointer to empty string", noBundle, ok)
+	}
+}

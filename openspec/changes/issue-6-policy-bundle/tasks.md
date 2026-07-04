@@ -227,19 +227,19 @@ untouched.
 
 Satisfies: *Console Surfaces the Judging Bundle Version*.
 
-- [ ] 6.1 [integration] Extend `internal/httpapi/httpapi_test.go` (console
+- [x] 6.1 [integration] Extend `internal/httpapi/httpapi_test.go` (console
       interactions list handler) with cases: an evaluated interaction
       under bundle version `v2` ⇒ response `policy_bundle_version =
       "v2"`; an unevaluated interaction ⇒ `policy_bundle_version = null`
       (not `""`); an evaluated interaction with no active bundle at
       evaluation time (sentinel `""`) ⇒ `policy_bundle_version = ""`,
       distinct from `null`.
-- [ ] 6.2 Add `PolicyBundleVersion *string` to the httpapi `Interaction`
+- [x] 6.2 Add `PolicyBundleVersion *string` to the httpapi `Interaction`
       DTO in `internal/httpapi/httpapi.go`, mapped from Work Unit 1.6's
       query column with no `null`/`""` coercion.
-- [ ] 6.3 Update `apps/console/src/lib/api.ts`: `Interaction` type gains
+- [x] 6.3 Update `apps/console/src/lib/api.ts`: `Interaction` type gains
       `policy_bundle_version: string | null`.
-- [ ] 6.4 Update `apps/console/src/app/interactions/InteractionsTable.tsx`:
+- [x] 6.4 Update `apps/console/src/app/interactions/InteractionsTable.tsx`:
       add a visible `policy_bundle_version` column, rendering `null` as an
       explicit empty/dash state distinct from an empty string.
 

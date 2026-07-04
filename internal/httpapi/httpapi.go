@@ -26,6 +26,11 @@ type Interaction struct {
 	Reason        *string   `json:"reason"`
 	RequiresHITL  *bool     `json:"requires_hitl"`
 	ThreatFlagged *bool     `json:"threat_flagged"`
+	// PolicyBundleVersion is nil when the interaction has not been
+	// evaluated (no evaluation row), and the stored (possibly empty-string
+	// sentinel) value when it has — the empty string is a real, distinct
+	// value from nil, never coerced to either extreme (issue #6).
+	PolicyBundleVersion *string `json:"policy_bundle_version"`
 }
 
 type InteractionReader interface {
