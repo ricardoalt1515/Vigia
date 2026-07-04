@@ -152,6 +152,35 @@ func (q *Queries) GetActiveBundleByTenant(ctx context.Context, tenantID pgtype.U
 	return i, err
 }
 
+const getPolicyBundleByID = `-- name: GetPolicyBundleByID :one
+SELECT id, tenant_id, name, version, status, created_at
+FROM policy_bundles
+WHERE id = $1 AND tenant_id = $2
+`
+
+type GetPolicyBundleByIDParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+// ReEvaluateInteraction's historical-bundle validation (issue #6): scoped to
+// (id, tenant_id) so a foreign-tenant bundle id naturally resolves to
+// pgx.ErrNoRows — the same "not found" outcome as a truly unknown id, never
+// leaking whether the bundle exists for a different tenant.
+func (q *Queries) GetPolicyBundleByID(ctx context.Context, arg GetPolicyBundleByIDParams) (PolicyBundle, error) {
+	row := q.db.QueryRow(ctx, getPolicyBundleByID, arg.ID, arg.TenantID)
+	var i PolicyBundle
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Name,
+		&i.Version,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listPolicyBundleRulesByTenant = `-- name: ListPolicyBundleRulesByTenant :many
 SELECT pbr.tenant_id, pbr.policy_bundle_id, pbr.policy_rule_id, pbr.created_at,
        pbr.effective_date, pbr.legal_basis,

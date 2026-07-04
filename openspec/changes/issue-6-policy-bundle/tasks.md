@@ -178,23 +178,23 @@ green against local Postgres; clean skip under `go test ./... -short`.
 
 Satisfies: *Reproducible Re-Evaluation Against a Specific Bundle Version*.
 
-- [ ] 4.1 [unit] Write table-driven tests before implementing: same
+- [x] 4.1 [unit] Write table-driven tests before implementing: same
       interaction + same historical `policyBundleID` rerun twice ⇒
       identical outcome + `inputs_digest` + computed hash (determinism);
       unknown/foreign-tenant `policyBundleID` ⇒ defined error, no
       evaluation persisted.
-- [ ] 4.2 Implement `Service.ReEvaluateInteraction(ctx, interactionID,
+- [x] 4.2 Implement `Service.ReEvaluateInteraction(ctx, interactionID,
       policyBundleID string) (core.Evaluation, error)` in
       `internal/evaluation/service.go`: reruns the same wired
       detectors/judge, stamps the caller-supplied historical version+id,
       returns an **unpersisted** `core.Evaluation` (no `CreateEvaluation`
       call).
-- [ ] 4.3 [integration] Write `internal/httpapi/httpapi_test.go` cases
+- [x] 4.3 [integration] Write `internal/httpapi/httpapi_test.go` cases
       before wiring: `POST /v1/interactions/{id}/reevaluate` with a valid
       historical bundle id returns 200 with the stamped version/id;
       unknown bundle id returns a defined error status and creates no
       evaluation row.
-- [ ] 4.4 Wire `POST /v1/interactions/{id}/reevaluate` in
+- [x] 4.4 Wire `POST /v1/interactions/{id}/reevaluate` in
       `internal/httpapi/httpapi.go`, authenticated via existing tenant
       auth, calling `Service.ReEvaluateInteraction`.
 

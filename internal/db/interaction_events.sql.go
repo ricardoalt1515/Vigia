@@ -112,6 +112,50 @@ func (q *Queries) GetInteractionEventByID(ctx context.Context, arg GetInteractio
 	return i, err
 }
 
+const getInteractionEventByIDAnyTenant = `-- name: GetInteractionEventByIDAnyTenant :one
+SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
+FROM interaction_events
+WHERE id = $1
+`
+
+type GetInteractionEventByIDAnyTenantRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	TenantID       pgtype.UUID        `json:"tenant_id"`
+	DebtorID       pgtype.UUID        `json:"debtor_id"`
+	Channel        string             `json:"channel"`
+	Direction      string             `json:"direction"`
+	Status         string             `json:"status"`
+	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef  *string            `json:"transcript_ref"`
+	DebtorTimezone string             `json:"debtor_timezone"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+// ReEvaluateInteraction lookup (issue #6): the caller supplies only an
+// interactionID, not its tenant, so this intentionally has no tenant_id
+// filter. MUST only ever be called through the owner/migration connection
+// (never the RLS-restricted vigia_app role) — the returned tenant_id is
+// then used to scope every subsequent query, and the httpapi handler
+// independently re-verifies it against the authenticated caller before
+// responding.
+func (q *Queries) GetInteractionEventByIDAnyTenant(ctx context.Context, id pgtype.UUID) (GetInteractionEventByIDAnyTenantRow, error) {
+	row := q.db.QueryRow(ctx, getInteractionEventByIDAnyTenant, id)
+	var i GetInteractionEventByIDAnyTenantRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.DebtorID,
+		&i.Channel,
+		&i.Direction,
+		&i.Status,
+		&i.OccurredAt,
+		&i.TranscriptRef,
+		&i.DebtorTimezone,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listCurrentTenantInteractions = `-- name: ListCurrentTenantInteractions :many
 SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
 FROM interaction_events

@@ -40,7 +40,20 @@ type Querier interface {
 	// Evidence export lookup (issue #3): fetch a single interaction scoped to
 	// its tenant.
 	GetInteractionEventByID(ctx context.Context, arg GetInteractionEventByIDParams) (GetInteractionEventByIDRow, error)
+	// ReEvaluateInteraction lookup (issue #6): the caller supplies only an
+	// interactionID, not its tenant, so this intentionally has no tenant_id
+	// filter. MUST only ever be called through the owner/migration connection
+	// (never the RLS-restricted vigia_app role) — the returned tenant_id is
+	// then used to scope every subsequent query, and the httpapi handler
+	// independently re-verifies it against the authenticated caller before
+	// responding.
+	GetInteractionEventByIDAnyTenant(ctx context.Context, id pgtype.UUID) (GetInteractionEventByIDAnyTenantRow, error)
 	GetInteractionTranscriptByInteraction(ctx context.Context, arg GetInteractionTranscriptByInteractionParams) (InteractionTranscript, error)
+	// ReEvaluateInteraction's historical-bundle validation (issue #6): scoped to
+	// (id, tenant_id) so a foreign-tenant bundle id naturally resolves to
+	// pgx.ErrNoRows — the same "not found" outcome as a truly unknown id, never
+	// leaking whether the bundle exists for a different tenant.
+	GetPolicyBundleByID(ctx context.Context, arg GetPolicyBundleByIDParams) (PolicyBundle, error)
 	GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error)
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
 	InsertEvidenceRecord(ctx context.Context, arg InsertEvidenceRecordParams) (EvidenceRecord, error)

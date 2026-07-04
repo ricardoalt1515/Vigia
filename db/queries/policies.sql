@@ -37,6 +37,15 @@ WHERE tenant_id = $1 AND status = 'active';
 -- bundle name, not globally per tenant.
 SELECT count(*) FROM policy_bundles WHERE tenant_id = $1 AND name = $2;
 
+-- name: GetPolicyBundleByID :one
+-- ReEvaluateInteraction's historical-bundle validation (issue #6): scoped to
+-- (id, tenant_id) so a foreign-tenant bundle id naturally resolves to
+-- pgx.ErrNoRows — the same "not found" outcome as a truly unknown id, never
+-- leaking whether the bundle exists for a different tenant.
+SELECT id, tenant_id, name, version, status, created_at
+FROM policy_bundles
+WHERE id = $1 AND tenant_id = $2;
+
 -- name: LockActivePolicyBundle :one
 -- CreateBundleVersion's serialization point (Design Decision 6): locks the
 -- prior active row scoped to (tenant_id, name) so two concurrent

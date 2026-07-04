@@ -15,8 +15,10 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/auth"
 	"github.com/ricardoalt1515/vigia/internal/core"
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
+	"github.com/ricardoalt1515/vigia/internal/detection"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/httpapi"
+	"github.com/ricardoalt1515/vigia/internal/judge"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
 	"github.com/ricardoalt1515/vigia/internal/tenantdb"
 )
@@ -665,6 +667,139 @@ func (r *BundleResolverAdapter) ActiveBundle(ctx context.Context, tenantID strin
 }
 
 var _ evaluation.BundleResolver = (*BundleResolverAdapter)(nil)
+
+// InteractionLookupAdapter resolves a stored interaction (and its transcript,
+// if any) by id for evaluation.Service.ReEvaluateInteraction, implementing
+// evaluation.InteractionLookup. It intentionally runs through the owner
+// connection with NO tenant scoping on the first query (the caller supplies
+// only an interactionID, not its tenant) — the resolved tenant_id is then
+// used to scope the transcript lookup, and the httpapi handler independently
+// re-verifies the resolved tenant against the authenticated caller before
+// responding, so this never leaks another tenant's evaluation outcome.
+type InteractionLookupAdapter struct {
+	db tenantdb.Beginner
+}
+
+func NewInteractionLookupAdapter(db tenantdb.Beginner) *InteractionLookupAdapter {
+	return &InteractionLookupAdapter{db: db}
+}
+
+func NewInteractionLookupAdapterFromPool(pool *pgxpool.Pool) *InteractionLookupAdapter {
+	return NewInteractionLookupAdapter(poolBeginner{pool: pool})
+}
+
+func (a *InteractionLookupAdapter) GetInteractionForReEvaluation(ctx context.Context, interactionID string) (evaluation.ReEvaluationInput, bool, error) {
+	interactionUUID, err := parseUUID(interactionID)
+	if err != nil {
+		return evaluation.ReEvaluationInput{}, false, err
+	}
+
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		return evaluation.ReEvaluationInput{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	row, err := vigiaDB.New(tx).GetInteractionEventByIDAnyTenant(ctx, interactionUUID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return evaluation.ReEvaluationInput{}, false, nil
+		}
+		return evaluation.ReEvaluationInput{}, false, err
+	}
+	tenantID := uuidString(row.TenantID)
+
+	var utterances []judge.Utterance
+	transcript, err := vigiaDB.New(tx).GetInteractionTranscriptByInteraction(ctx, vigiaDB.GetInteractionTranscriptByInteractionParams{
+		TenantID:           row.TenantID,
+		InteractionEventID: row.ID,
+	})
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return evaluation.ReEvaluationInput{}, false, err
+		}
+	} else {
+		var stored []seedUtteranceShape
+		if err := json.Unmarshal(transcript.Utterances, &stored); err != nil {
+			return evaluation.ReEvaluationInput{}, false, err
+		}
+		utterances = make([]judge.Utterance, 0, len(stored))
+		for _, u := range stored {
+			utterances = append(utterances, judge.Utterance{Speaker: u.Speaker, Text: u.Text})
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return evaluation.ReEvaluationInput{}, false, err
+	}
+
+	return evaluation.ReEvaluationInput{
+		TenantID: tenantID,
+		Interaction: detection.Interaction{
+			OccurredAt:     row.OccurredAt.Time,
+			DebtorTimezone: row.DebtorTimezone,
+		},
+		Utterances: utterances,
+	}, true, nil
+}
+
+var _ evaluation.InteractionLookup = (*InteractionLookupAdapter)(nil)
+
+// seedUtteranceShape mirrors cmd/seed's private seedUtterance JSON shape:
+// the stored interaction_transcripts.utterances payload is
+// [{ "speaker": "...", "text": "..." }, ...] in transcript order.
+type seedUtteranceShape struct {
+	Speaker string `json:"speaker"`
+	Text    string `json:"text"`
+}
+
+// BundleVersionResolverAdapter resolves a specific historical bundle's
+// version by id, scoped to a tenant, implementing
+// evaluation.BundleVersionLookup.
+type BundleVersionResolverAdapter struct {
+	db tenantdb.Beginner
+}
+
+func NewBundleVersionResolverAdapter(db tenantdb.Beginner) *BundleVersionResolverAdapter {
+	return &BundleVersionResolverAdapter{db: db}
+}
+
+func NewBundleVersionResolverAdapterFromPool(pool *pgxpool.Pool) *BundleVersionResolverAdapter {
+	return NewBundleVersionResolverAdapter(poolBeginner{pool: pool})
+}
+
+func (a *BundleVersionResolverAdapter) BundleVersionByID(ctx context.Context, tenantID, policyBundleID string) (version string, found bool, err error) {
+	tenantUUID, err := parseUUID(tenantID)
+	if err != nil {
+		return "", false, err
+	}
+	bundleUUID, err := parseUUID(policyBundleID)
+	if err != nil {
+		return "", false, nil
+	}
+
+	err = tenantdb.WithTenantTx(ctx, a.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		bundle, err := vigiaDB.New(tx).GetPolicyBundleByID(ctx, vigiaDB.GetPolicyBundleByIDParams{
+			ID:       bundleUUID,
+			TenantID: tenantUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		version = bundle.Version
+		found = true
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return version, found, nil
+}
+
+var _ evaluation.BundleVersionLookup = (*BundleVersionResolverAdapter)(nil)
 
 // BundleRuleInput is one rule snapshot to attach to a new bundle version via
 // CreateBundleVersion: PolicyRuleID identifies the (already-existing)
