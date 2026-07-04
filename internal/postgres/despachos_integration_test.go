@@ -46,7 +46,7 @@ func TestDespachoRLSIsolationAcrossTenants(t *testing.T) {
 
 	tenantA, _ := seedTenantAndDebtor(t, ctx, pool, "despacho-rls-a")
 	tenantB, _ := seedTenantAndDebtor(t, ctx, pool, "despacho-rls-b")
-	seedDespacho(t, ctx, pool, tenantA, "despacho-rls/tenant-a")
+	despachoA := seedDespacho(t, ctx, pool, tenantA, "despacho-rls/tenant-a")
 	despachoB := seedDespacho(t, ctx, pool, tenantB, "despacho-rls/tenant-b")
 
 	appPool, err := pgxpool.New(ctx, appDatabaseURL)
@@ -73,6 +73,17 @@ func TestDespachoRLSIsolationAcrossTenants(t *testing.T) {
 		t.Fatal("tenant B's despacho row was readable under tenant A's RLS context")
 	}
 	rows.Close()
+
+	// Positive half: tenant A's own despacho row IS returned under tenant
+	// A's RLS context, so an unconditionally-false policy (USING (false))
+	// would not pass this test alongside the negative assertion above.
+	var visibleDespachoA string
+	if err := tx.QueryRow(ctx, `SELECT id FROM despachos WHERE tenant_id = $1`, tenantA).Scan(&visibleDespachoA); err != nil {
+		t.Fatalf("query tenant A despacho under tenant A context: %v", err)
+	}
+	if visibleDespachoA != despachoA {
+		t.Fatalf("visible despacho id = %s, want %s", visibleDespachoA, despachoA)
+	}
 
 	var visibleIDs []string
 	rows, err = tx.Query(ctx, `SELECT id FROM despachos`)

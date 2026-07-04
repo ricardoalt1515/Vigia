@@ -371,11 +371,16 @@ from showing a split `contact-hours` / `MX-REDECO-04` bucket for
 pre-migration rows. Assumption: this only matters for pre-production data —
 no production traffic predates this rename.
 
-`00008`'s `Down` reverses this backfill: `UPDATE detector_result_rows SET
-detector_code = 'contact-hours' WHERE detector_code = 'MX-REDECO-04' AND ...`
-(scoped to the rows the forward migration touched). This reversal is safe
-only pre-production — acceptable per the same assumption above, since no
-production traffic predates the rename.
+This backfill is intentionally **one-way**: `00008`'s `Down` does NOT reverse
+it. Once the wiring rename ships (a later PR of this change),
+`detector_result_rows` rows with `detector_code = 'MX-REDECO-04'` can be
+genuine post-rename rows that were never `'contact-hours'`, and there is no
+reliable predicate to distinguish "backfilled from contact-hours" from
+"inserted as MX-REDECO-04" after that point. A `Down` that blindly rewrote
+every `MX-REDECO-04` row back to `contact-hours` would corrupt those genuine
+rows. `Down` therefore leaves `detector_code` untouched; this is acceptable
+because this migration only matters for pre-production data, per the same
+assumption above.
 
 Two additional clarifications:
 - `UpsertPolicyRule`'s `INSERT ... ON CONFLICT (code) DO UPDATE` idempotency

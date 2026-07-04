@@ -64,16 +64,25 @@ ALTER TABLE debtors ADD COLUMN date_of_birth date;
 -- dashboard from showing a split contact-hours/MX-REDECO-04 bucket for
 -- pre-migration rows. Assumption: this only matters for pre-production
 -- data -- no production traffic predates this rename.
+--
+-- This backfill is intentionally ONE-WAY: Down does not reverse it (see the
+-- Down section below for why).
 UPDATE detector_result_rows SET detector_code = 'MX-REDECO-04' WHERE detector_code = 'contact-hours';
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
--- Reverses (e). Safe only pre-production, per the same assumption as above.
-UPDATE detector_result_rows SET detector_code = 'contact-hours' WHERE detector_code = 'MX-REDECO-04';
--- +goose StatementEnd
-
--- +goose StatementBegin
+-- (e) is intentionally NOT reversed here: the backfill is one-way. Once
+-- cmd/api/main.go and cmd/seed/main.go are wired to MX-REDECO-04 (a later
+-- PR of this change), rows with detector_code = 'MX-REDECO-04' can include
+-- genuine post-rename rows that were never 'contact-hours'. A Down that
+-- blindly rewrote detector_code = 'MX-REDECO-04' back to 'contact-hours'
+-- would corrupt those genuine rows -- there is no reliable predicate to
+-- distinguish "backfilled from contact-hours" from "inserted as
+-- MX-REDECO-04" after the rename ships. Rolling back this migration
+-- therefore leaves detector_code values untouched; this is acceptable
+-- because this migration only matters for pre-production data (no
+-- production traffic predates the rename).
 ALTER TABLE debtors DROP COLUMN IF EXISTS date_of_birth;
 -- +goose StatementEnd
 
