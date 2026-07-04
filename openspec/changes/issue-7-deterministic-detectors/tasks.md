@@ -55,6 +55,7 @@ Chain strategy: stacked-to-main
 - [x] 2b.3 [RED] Table-driven tests + `TestXNoIO` for payment-routing detector (MX-REDECO-10): creditor/non-creditor/missing scenarios.
 - [x] 2b.4 [GREEN] Implement `internal/detection/payment_routing.go`.
 - [x] 2b.5 Wire both in `cmd/api/main.go` + `cmd/seed/main.go`, `RequiresHITL: false`.
+- [x] 2b.6 (judgment-day fast-follow, discovered in PR2b review) Plumb the detector-input snapshot columns end to end: neither `CreateInteractionEvent`/`GetInteractionEventByID` (sqlc) nor `cmd/seed/devdata.go`'s fixtures nor `internal/postgres/adapters.go`'s `GetInteractionForReEvaluation` populated `detection.Interaction`'s new fields (`Channel`, `ContactPartyRelationship`, `ContactedPartyDOB`, `AuthorizedChannels`, `PaymentRecipient`, `DisclosureProvided`) from persisted data — every interaction evaluated via `cmd/seed dev-data` or `ReEvaluateInteraction` saw zero-valued detector input and MX-REDECO-06/07/10/11 always fail-closed to BLOCK. Fixed: extended `db/queries/{debtors,interaction_events}.sql` + regenerated sqlc; gave every seed fixture explicit compliant defaults plus one demo-violation fixture per new detector; mapped the snapshot onto `detection.Interaction` in the adapter. Verified via `go run ./cmd/seed dev-data` against a migrated dev DB: compliant fixtures pass all four new detectors, each violation fixture blocks only its own detector.
 
 ## Phase 2c (PR2c): Disclosure (warn) + Rename + Seeding
 
