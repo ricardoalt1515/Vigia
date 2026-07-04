@@ -112,6 +112,41 @@ func TestHashGoldenValueUnchangedWithJudgeFieldAdded(t *testing.T) {
 	}
 }
 
+// TestHashGoldenValueUnchangedWithEmptyPolicyBundleVersion covers issue #6's
+// load-bearing hazard: when no bundle is active, the stamped version stays
+// the empty-string sentinel, so Body serializes byte-identically to today
+// and the golden hash MUST remain untouched. This is a no-diff assertion:
+// goldenBody() already sets PolicyBundleVersion to "" explicitly, proving
+// the sentinel path never regresses the pinned hex.
+func TestHashGoldenValueUnchangedWithEmptyPolicyBundleVersion(t *testing.T) {
+	const wantHash = "4479342d9bbcc290750de7a01f1986d234884e256bcd30965aaa49f05810384d"
+
+	body := goldenBody()
+	body.PolicyBundleVersion = "" // explicit: the issue #6 no-active-bundle sentinel.
+
+	got := ledger.Hash(ledger.GenesisPrevHash, body)
+	if got != wantHash {
+		t.Fatalf("Hash() = %q, want golden %q (unchanged by the empty-sentinel PolicyBundleVersion)", got, wantHash)
+	}
+}
+
+// TestHashChangesWithNonEmptyPolicyBundleVersion proves stamping is
+// genuinely hashed when present: a real (non-empty) bundle version must
+// produce a DIFFERENT hash than the empty-sentinel golden case, or the
+// evidence ledger would not actually be binding evaluations to the bundle
+// version that judged them.
+func TestHashChangesWithNonEmptyPolicyBundleVersion(t *testing.T) {
+	emptyVersionHash := ledger.Hash(ledger.GenesisPrevHash, goldenBody())
+
+	stamped := goldenBody()
+	stamped.PolicyBundleVersion = "v2"
+	stampedHash := ledger.Hash(ledger.GenesisPrevHash, stamped)
+
+	if stampedHash == emptyVersionHash {
+		t.Fatal("Hash() did not change when PolicyBundleVersion went from empty to a real stamped version")
+	}
+}
+
 // goldenJudgeBody is the fixed, hardcoded judge-present Body used to pin the
 // judge-present canonical hash bytes.
 func goldenJudgeBody() ledger.Body {

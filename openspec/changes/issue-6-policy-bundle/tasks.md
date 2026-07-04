@@ -208,13 +208,13 @@ Verification: `go test ./internal/evaluation/... ./internal/httpapi/...
 Satisfies: *Evaluations Are Stamped With the Resolved Bundle Version*
 (ledger-hash-stability half, referenced in design's load-bearing hazard).
 
-- [ ] 5.1 [unit] Extend `internal/ledger` golden-hash test: assert the
+- [x] 5.1 [unit] Extend `internal/ledger` golden-hash test: assert the
       existing pinned hex hash is unchanged when `PolicyBundleVersion =
       ""` (byte-identical Body, no regression from schema/field additions
       elsewhere). Add a second case: a non-empty `PolicyBundleVersion`
       value produces a **different** hash than the empty-sentinel case,
       proving stamping is hashed when present.
-- [ ] 5.2 No production code change expected in this unit — if the golden
+- [x] 5.2 No production code change expected in this unit — if the golden
       test fails, treat it as a blocking regression against Work Units 1–4
       and fix the regression, not the pinned literal.
 
