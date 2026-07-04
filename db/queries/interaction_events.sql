@@ -1,14 +1,26 @@
 -- name: GetInteractionEventByID :one
--- Evidence export lookup (issue #3): fetch a single interaction scoped to
--- its tenant.
-SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
+-- Evidence export lookup (issue #3), also used by
+-- InteractionLookupAdapter.GetInteractionForReEvaluation (issue #6): the
+-- detector-input snapshot columns (issue #7) MUST be selected here so
+-- re-evaluation reads the SAME snapshot the original evaluation used.
+SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone,
+    contact_party_relationship, contacted_party_dob, authorized_channels, payment_recipient, disclosure_provided,
+    created_at
 FROM interaction_events
 WHERE id = $1 AND tenant_id = $2;
 
 -- name: CreateInteractionEvent :one
-INSERT INTO interaction_events (tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at;
+-- The detector-input snapshot columns (issue #7) are nullable; passing NULL
+-- for any of them means "unresolved" and each detector fails closed on it
+-- per its own logic (see the deterministic-detectors spec).
+INSERT INTO interaction_events (
+    tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone,
+    contact_party_relationship, contacted_party_dob, authorized_channels, payment_recipient, disclosure_provided
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone,
+    contact_party_relationship, contacted_party_dob, authorized_channels, payment_recipient, disclosure_provided,
+    created_at;
 
 -- name: ListInteractionEventsByTenant :many
 SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at

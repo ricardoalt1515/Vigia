@@ -12,35 +12,53 @@ import (
 )
 
 const createInteractionEvent = `-- name: CreateInteractionEvent :one
-INSERT INTO interaction_events (tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
+INSERT INTO interaction_events (
+    tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone,
+    contact_party_relationship, contacted_party_dob, authorized_channels, payment_recipient, disclosure_provided
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone,
+    contact_party_relationship, contacted_party_dob, authorized_channels, payment_recipient, disclosure_provided,
+    created_at
 `
 
 type CreateInteractionEventParams struct {
-	TenantID       pgtype.UUID        `json:"tenant_id"`
-	DebtorID       pgtype.UUID        `json:"debtor_id"`
-	Channel        string             `json:"channel"`
-	Direction      string             `json:"direction"`
-	Status         string             `json:"status"`
-	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
-	TranscriptRef  *string            `json:"transcript_ref"`
-	DebtorTimezone string             `json:"debtor_timezone"`
+	TenantID                 pgtype.UUID        `json:"tenant_id"`
+	DebtorID                 pgtype.UUID        `json:"debtor_id"`
+	Channel                  string             `json:"channel"`
+	Direction                string             `json:"direction"`
+	Status                   string             `json:"status"`
+	OccurredAt               pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef            *string            `json:"transcript_ref"`
+	DebtorTimezone           string             `json:"debtor_timezone"`
+	ContactPartyRelationship *string            `json:"contact_party_relationship"`
+	ContactedPartyDob        pgtype.Date        `json:"contacted_party_dob"`
+	AuthorizedChannels       []string           `json:"authorized_channels"`
+	PaymentRecipient         *string            `json:"payment_recipient"`
+	DisclosureProvided       *bool              `json:"disclosure_provided"`
 }
 
 type CreateInteractionEventRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	TenantID       pgtype.UUID        `json:"tenant_id"`
-	DebtorID       pgtype.UUID        `json:"debtor_id"`
-	Channel        string             `json:"channel"`
-	Direction      string             `json:"direction"`
-	Status         string             `json:"status"`
-	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
-	TranscriptRef  *string            `json:"transcript_ref"`
-	DebtorTimezone string             `json:"debtor_timezone"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ID                       pgtype.UUID        `json:"id"`
+	TenantID                 pgtype.UUID        `json:"tenant_id"`
+	DebtorID                 pgtype.UUID        `json:"debtor_id"`
+	Channel                  string             `json:"channel"`
+	Direction                string             `json:"direction"`
+	Status                   string             `json:"status"`
+	OccurredAt               pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef            *string            `json:"transcript_ref"`
+	DebtorTimezone           string             `json:"debtor_timezone"`
+	ContactPartyRelationship *string            `json:"contact_party_relationship"`
+	ContactedPartyDob        pgtype.Date        `json:"contacted_party_dob"`
+	AuthorizedChannels       []string           `json:"authorized_channels"`
+	PaymentRecipient         *string            `json:"payment_recipient"`
+	DisclosureProvided       *bool              `json:"disclosure_provided"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
 }
 
+// The detector-input snapshot columns (issue #7) are nullable; passing NULL
+// for any of them means "unresolved" and each detector fails closed on it
+// per its own logic (see the deterministic-detectors spec).
 func (q *Queries) CreateInteractionEvent(ctx context.Context, arg CreateInteractionEventParams) (CreateInteractionEventRow, error) {
 	row := q.db.QueryRow(ctx, createInteractionEvent,
 		arg.TenantID,
@@ -51,6 +69,11 @@ func (q *Queries) CreateInteractionEvent(ctx context.Context, arg CreateInteract
 		arg.OccurredAt,
 		arg.TranscriptRef,
 		arg.DebtorTimezone,
+		arg.ContactPartyRelationship,
+		arg.ContactedPartyDob,
+		arg.AuthorizedChannels,
+		arg.PaymentRecipient,
+		arg.DisclosureProvided,
 	)
 	var i CreateInteractionEventRow
 	err := row.Scan(
@@ -63,13 +86,20 @@ func (q *Queries) CreateInteractionEvent(ctx context.Context, arg CreateInteract
 		&i.OccurredAt,
 		&i.TranscriptRef,
 		&i.DebtorTimezone,
+		&i.ContactPartyRelationship,
+		&i.ContactedPartyDob,
+		&i.AuthorizedChannels,
+		&i.PaymentRecipient,
+		&i.DisclosureProvided,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getInteractionEventByID = `-- name: GetInteractionEventByID :one
-SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
+SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone,
+    contact_party_relationship, contacted_party_dob, authorized_channels, payment_recipient, disclosure_provided,
+    created_at
 FROM interaction_events
 WHERE id = $1 AND tenant_id = $2
 `
@@ -80,20 +110,27 @@ type GetInteractionEventByIDParams struct {
 }
 
 type GetInteractionEventByIDRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	TenantID       pgtype.UUID        `json:"tenant_id"`
-	DebtorID       pgtype.UUID        `json:"debtor_id"`
-	Channel        string             `json:"channel"`
-	Direction      string             `json:"direction"`
-	Status         string             `json:"status"`
-	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
-	TranscriptRef  *string            `json:"transcript_ref"`
-	DebtorTimezone string             `json:"debtor_timezone"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ID                       pgtype.UUID        `json:"id"`
+	TenantID                 pgtype.UUID        `json:"tenant_id"`
+	DebtorID                 pgtype.UUID        `json:"debtor_id"`
+	Channel                  string             `json:"channel"`
+	Direction                string             `json:"direction"`
+	Status                   string             `json:"status"`
+	OccurredAt               pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef            *string            `json:"transcript_ref"`
+	DebtorTimezone           string             `json:"debtor_timezone"`
+	ContactPartyRelationship *string            `json:"contact_party_relationship"`
+	ContactedPartyDob        pgtype.Date        `json:"contacted_party_dob"`
+	AuthorizedChannels       []string           `json:"authorized_channels"`
+	PaymentRecipient         *string            `json:"payment_recipient"`
+	DisclosureProvided       *bool              `json:"disclosure_provided"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
 }
 
-// Evidence export lookup (issue #3): fetch a single interaction scoped to
-// its tenant.
+// Evidence export lookup (issue #3), also used by
+// InteractionLookupAdapter.GetInteractionForReEvaluation (issue #6): the
+// detector-input snapshot columns (issue #7) MUST be selected here so
+// re-evaluation reads the SAME snapshot the original evaluation used.
 func (q *Queries) GetInteractionEventByID(ctx context.Context, arg GetInteractionEventByIDParams) (GetInteractionEventByIDRow, error) {
 	row := q.db.QueryRow(ctx, getInteractionEventByID, arg.ID, arg.TenantID)
 	var i GetInteractionEventByIDRow
@@ -107,6 +144,11 @@ func (q *Queries) GetInteractionEventByID(ctx context.Context, arg GetInteractio
 		&i.OccurredAt,
 		&i.TranscriptRef,
 		&i.DebtorTimezone,
+		&i.ContactPartyRelationship,
+		&i.ContactedPartyDob,
+		&i.AuthorizedChannels,
+		&i.PaymentRecipient,
+		&i.DisclosureProvided,
 		&i.CreatedAt,
 	)
 	return i, err

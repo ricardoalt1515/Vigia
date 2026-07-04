@@ -12,9 +12,9 @@ import (
 )
 
 const createDebtor = `-- name: CreateDebtor :one
-INSERT INTO debtors (tenant_id, external_ref, display_name, timezone)
-VALUES ($1, $2, $3, $4)
-RETURNING id, tenant_id, external_ref, display_name, timezone, created_at, updated_at
+INSERT INTO debtors (tenant_id, external_ref, display_name, timezone, date_of_birth)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, tenant_id, external_ref, display_name, timezone, date_of_birth, created_at, updated_at
 `
 
 type CreateDebtorParams struct {
@@ -22,6 +22,7 @@ type CreateDebtorParams struct {
 	ExternalRef string      `json:"external_ref"`
 	DisplayName string      `json:"display_name"`
 	Timezone    string      `json:"timezone"`
+	DateOfBirth pgtype.Date `json:"date_of_birth"`
 }
 
 type CreateDebtorRow struct {
@@ -30,16 +31,20 @@ type CreateDebtorRow struct {
 	ExternalRef string             `json:"external_ref"`
 	DisplayName string             `json:"display_name"`
 	Timezone    string             `json:"timezone"`
+	DateOfBirth pgtype.Date        `json:"date_of_birth"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+// date_of_birth (issue #7) is the durable DOB source, snapshotted onto
+// interaction_events.contacted_party_dob at ingest time by the caller.
 func (q *Queries) CreateDebtor(ctx context.Context, arg CreateDebtorParams) (CreateDebtorRow, error) {
 	row := q.db.QueryRow(ctx, createDebtor,
 		arg.TenantID,
 		arg.ExternalRef,
 		arg.DisplayName,
 		arg.Timezone,
+		arg.DateOfBirth,
 	)
 	var i CreateDebtorRow
 	err := row.Scan(
@@ -48,6 +53,7 @@ func (q *Queries) CreateDebtor(ctx context.Context, arg CreateDebtorParams) (Cre
 		&i.ExternalRef,
 		&i.DisplayName,
 		&i.Timezone,
+		&i.DateOfBirth,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -55,7 +61,7 @@ func (q *Queries) CreateDebtor(ctx context.Context, arg CreateDebtorParams) (Cre
 }
 
 const getDebtorByTenant = `-- name: GetDebtorByTenant :one
-SELECT id, tenant_id, external_ref, display_name, timezone, created_at, updated_at
+SELECT id, tenant_id, external_ref, display_name, timezone, date_of_birth, created_at, updated_at
 FROM debtors
 WHERE tenant_id = $1 AND id = $2
 `
@@ -71,6 +77,7 @@ type GetDebtorByTenantRow struct {
 	ExternalRef string             `json:"external_ref"`
 	DisplayName string             `json:"display_name"`
 	Timezone    string             `json:"timezone"`
+	DateOfBirth pgtype.Date        `json:"date_of_birth"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
@@ -84,6 +91,7 @@ func (q *Queries) GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantPa
 		&i.ExternalRef,
 		&i.DisplayName,
 		&i.Timezone,
+		&i.DateOfBirth,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -91,7 +99,7 @@ func (q *Queries) GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantPa
 }
 
 const listDebtorsByTenant = `-- name: ListDebtorsByTenant :many
-SELECT id, tenant_id, external_ref, display_name, timezone, created_at, updated_at
+SELECT id, tenant_id, external_ref, display_name, timezone, date_of_birth, created_at, updated_at
 FROM debtors
 WHERE tenant_id = $1
 ORDER BY created_at DESC
@@ -103,6 +111,7 @@ type ListDebtorsByTenantRow struct {
 	ExternalRef string             `json:"external_ref"`
 	DisplayName string             `json:"display_name"`
 	Timezone    string             `json:"timezone"`
+	DateOfBirth pgtype.Date        `json:"date_of_birth"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
@@ -122,6 +131,7 @@ func (q *Queries) ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID)
 			&i.ExternalRef,
 			&i.DisplayName,
 			&i.Timezone,
+			&i.DateOfBirth,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {

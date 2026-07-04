@@ -46,11 +46,19 @@ func TestSeedDevDataIntegration(t *testing.T) {
 
 	queries := vigiaDB.New(pool)
 	issuer := defaultKeyIssuer{store: postgresTenantAPIKeyCreator{queries: queries}}
+	// Detectors mirror cmd/api/main.go's and cmd/seed/main.go's real
+	// production wiring (issue #7: MX-REDECO-06/07/10/11), so this
+	// integration test genuinely proves the detector-input snapshot
+	// plumbing end to end, not a stand-in pipeline.
 	evaluator := evaluation.Service{
 		Detectors: []evaluation.NamedDetector{
 			{Code: "contact-hours", Detector: detection.ContactHoursDetector{
 				Window: detection.Window{StartHour: 8, EndHour: 21},
 			}},
+			{Code: "MX-REDECO-06", Detector: detection.ThirdPartyContactDetector{}},
+			{Code: "MX-REDECO-07", Detector: detection.ProtectedPopulationDetector{}, RequiresHITL: true},
+			{Code: "MX-REDECO-11", Detector: detection.AuthorizedChannelDetector{}},
+			{Code: "MX-REDECO-10", Detector: detection.PaymentRoutingDetector{}},
 		},
 		Judges: []evaluation.NamedJudge{
 			{Code: "MX-REDECO-05", Judge: judge.FakeJudge{}},
@@ -119,24 +127,29 @@ func TestSeedDevDataIntegration(t *testing.T) {
 		t.Errorf("debtor timezone %q should be a valid IANA zone: %v", debtorTimezone, err)
 	}
 
-	// Assert exactly six interaction events for this tenant (the fixture
-	// transcript_refs, including the out-of-hours fixture and the
-	// threatening/neutral transcript fixtures, issue #4), each snapshotting
-	// the debtor's timezone (spec "Seeded interactions snapshot the debtor's
-	// timezone").
+	// Assert exactly ten interaction events for this tenant (the fixture
+	// transcript_refs, including the out-of-hours fixture, the
+	// threatening/neutral transcript fixtures (issue #4), and the four
+	// issue #7 new-detector demo fixtures), each snapshotting the debtor's
+	// timezone (spec "Seeded interactions snapshot the debtor's timezone").
 	events, err := queries.ListInteractionEventsByTenant(ctx, tenant.ID)
 	if err != nil {
 		t.Fatalf("list interaction events: %v", err)
 	}
 	fixtureRefs := map[string]bool{
-		"seed/demo/call-01":             false,
-		"seed/demo/message-01":          false,
-		"seed/demo/email-01":            false,
-		"seed/demo/call-02-after-hours": false,
-		"seed/demo/call-03-threatening": false,
-		"seed/demo/call-04-neutral":     false,
+		"seed/demo/call-01":                      false,
+		"seed/demo/message-01":                   false,
+		"seed/demo/email-01":                     false,
+		"seed/demo/call-02-after-hours":          false,
+		"seed/demo/call-03-threatening":          false,
+		"seed/demo/call-04-neutral":              false,
+		"seed/demo/call-05-third-party":          false,
+		"seed/demo/call-06-protected-minor":      false,
+		"seed/demo/call-07-unauthorized-channel": false,
+		"seed/demo/message-08-payment-routing":   false,
 	}
 	var threateningID, neutralID pgtype.UUID
+	var compliantID, thirdPartyID, protectedMinorID, unauthorizedChannelID, paymentRoutingID pgtype.UUID
 	for _, e := range events {
 		if e.TranscriptRef != nil {
 			fixtureRefs[*e.TranscriptRef] = true
@@ -145,6 +158,20 @@ func TestSeedDevDataIntegration(t *testing.T) {
 				threateningID = e.ID
 			case "seed/demo/call-04-neutral":
 				neutralID = e.ID
+			case "seed/demo/call-01":
+				// The first fixture is compliant for every issue #7
+				// detector (relationship debtor, authorized channel,
+				// creditor recipient, adult DOB) — used below to prove the
+				// PASS path end to end.
+				compliantID = e.ID
+			case "seed/demo/call-05-third-party":
+				thirdPartyID = e.ID
+			case "seed/demo/call-06-protected-minor":
+				protectedMinorID = e.ID
+			case "seed/demo/call-07-unauthorized-channel":
+				unauthorizedChannelID = e.ID
+			case "seed/demo/message-08-payment-routing":
+				paymentRoutingID = e.ID
 			}
 		}
 		if e.DebtorTimezone != debtorTimezone {
@@ -156,8 +183,8 @@ func TestSeedDevDataIntegration(t *testing.T) {
 			t.Errorf("interaction event with transcript_ref %q not found after seed", ref)
 		}
 	}
-	if len(events) != 6 {
-		t.Errorf("interaction_events count = %d, want 6", len(events))
+	if len(events) != 10 {
+		t.Errorf("interaction_events count = %d, want 10", len(events))
 	}
 
 	// Assert the threatening seed transcript's interaction evaluates to a
@@ -188,6 +215,104 @@ func TestSeedDevDataIntegration(t *testing.T) {
 	}
 	if neutralHITL {
 		t.Error("neutral interaction requires_hitl = true, want false from the judge step alone")
+	}
+
+	// Issue #7 (judgment-day fix): prove the detector-input snapshot
+	// columns actually flow from cmd/seed's fixtures through
+	// CreateInteractionEvent into detection.Interaction, not silently
+	// zero-valued. Without this plumbing, every one of MX-REDECO-06/07/10/11
+	// would fail closed to BLOCK on every interaction, regardless of the
+	// fixture's real relationship/channel/recipient/DOB data.
+	detectorOutcome := func(t *testing.T, interactionID pgtype.UUID, code string) string {
+		t.Helper()
+		var outcome string
+		if err := pool.QueryRow(ctx, `
+			SELECT dr.outcome
+			FROM detector_result_rows dr
+			JOIN evaluations e ON e.id = dr.evaluation_id
+			WHERE e.interaction_event_id = $1 AND dr.detector_code = $2
+		`, interactionID, code).Scan(&outcome); err != nil {
+			t.Fatalf("read detector_result_rows outcome for %s on interaction %s: %v", code, uuidToString(interactionID), err)
+		}
+		return outcome
+	}
+
+	// (a) The compliant fixture (relationship=debtor, its own channel
+	// authorized, recipient=creditor, adult DOB) PASSES all four new
+	// hard-block detectors.
+	for _, code := range []string{"MX-REDECO-06", "MX-REDECO-07", "MX-REDECO-11", "MX-REDECO-10"} {
+		if got := detectorOutcome(t, compliantID, code); got != "pass" {
+			t.Errorf("compliant fixture %s outcome = %q, want pass", code, got)
+		}
+	}
+
+	// (b) Each violation-demo fixture BLOCKs (persisted as "fail") on
+	// exactly the detector it targets.
+	if got := detectorOutcome(t, thirdPartyID, "MX-REDECO-06"); got != "fail" {
+		t.Errorf("third-party demo fixture MX-REDECO-06 outcome = %q, want fail", got)
+	}
+	if got := detectorOutcome(t, protectedMinorID, "MX-REDECO-07"); got != "fail" {
+		t.Errorf("protected-minor demo fixture MX-REDECO-07 outcome = %q, want fail", got)
+	}
+	if got := detectorOutcome(t, unauthorizedChannelID, "MX-REDECO-11"); got != "fail" {
+		t.Errorf("unauthorized-channel demo fixture MX-REDECO-11 outcome = %q, want fail", got)
+	}
+	if got := detectorOutcome(t, paymentRoutingID, "MX-REDECO-10"); got != "fail" {
+		t.Errorf("payment-routing demo fixture MX-REDECO-10 outcome = %q, want fail", got)
+	}
+
+	// The protected-population BLOCK must set requires_hitl=true on its
+	// evaluation (spec "MX-REDECO-07 blocks require Human-in-the-Loop").
+	var protectedMinorHITL bool
+	if err := pool.QueryRow(ctx, `
+		SELECT requires_hitl FROM evaluations WHERE interaction_event_id = $1
+	`, protectedMinorID).Scan(&protectedMinorHITL); err != nil {
+		t.Fatalf("read protected-minor interaction evaluation: %v", err)
+	}
+	if !protectedMinorHITL {
+		t.Error("protected-minor interaction requires_hitl = false, want true (MX-REDECO-07 block)")
+	}
+
+	// (c) Re-evaluation reproducibility: GetInteractionForReEvaluation (the
+	// real adapter used by Service.ReEvaluateInteraction, issue #6) MUST map
+	// the SAME detector-input snapshot the original evaluation used, not a
+	// zero-valued Interaction. Re-running the four new detectors directly
+	// against the adapter's returned Interaction MUST reproduce the exact
+	// same pass outcomes persisted above for the compliant fixture.
+	lookup := postgres.NewInteractionLookupAdapterFromPool(pool)
+	reInput, reInputFound, err := lookup.GetInteractionForReEvaluation(ctx, uuidToString(tenant.ID), uuidToString(compliantID))
+	if err != nil {
+		t.Fatalf("GetInteractionForReEvaluation: %v", err)
+	}
+	if !reInputFound {
+		t.Fatal("GetInteractionForReEvaluation: compliant interaction not found")
+	}
+	if reInput.Interaction.Channel == "" {
+		t.Error("GetInteractionForReEvaluation: Channel is empty, want the snapshotted channel")
+	}
+	if reInput.Interaction.ContactPartyRelationship != "debtor" {
+		t.Errorf("GetInteractionForReEvaluation: ContactPartyRelationship = %q, want %q", reInput.Interaction.ContactPartyRelationship, "debtor")
+	}
+	if len(reInput.Interaction.AuthorizedChannels) == 0 {
+		t.Error("GetInteractionForReEvaluation: AuthorizedChannels is empty, want the snapshotted list")
+	}
+	if reInput.Interaction.PaymentRecipient != "creditor" {
+		t.Errorf("GetInteractionForReEvaluation: PaymentRecipient = %q, want %q", reInput.Interaction.PaymentRecipient, "creditor")
+	}
+	if reInput.Interaction.ContactedPartyDOB == nil {
+		t.Error("GetInteractionForReEvaluation: ContactedPartyDOB is nil, want the debtor's snapshotted date of birth")
+	}
+	reEvalDetectors := map[string]detection.Detector{
+		"MX-REDECO-06": detection.ThirdPartyContactDetector{},
+		"MX-REDECO-07": detection.ProtectedPopulationDetector{},
+		"MX-REDECO-11": detection.AuthorizedChannelDetector{},
+		"MX-REDECO-10": detection.PaymentRoutingDetector{},
+	}
+	for code, d := range reEvalDetectors {
+		result := d.Evaluate(reInput.Interaction)
+		if result.Outcome != detection.OutcomePass {
+			t.Errorf("re-evaluated %s on the adapter's snapshot = %q, want pass (reproducibility)", code, result.Outcome)
+		}
 	}
 
 	// Re-running seed must not create a duplicate transcript for either
