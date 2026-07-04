@@ -1,4 +1,4 @@
-.PHONY: dev down logs tools migrate-up migrate-down sqlc test test-db test-rls tidy worker seed-dev console-install console-dev
+.PHONY: dev down logs tools migrate-up migrate-down sqlc build test test-db test-rls eval-golden tidy worker seed-dev console-install console-dev
 
 DATABASE_URL ?= postgres://vigia:vigia@localhost:5432/vigia?sslmode=disable
 APP_DATABASE_URL ?= postgres://vigia_app:vigia_app@localhost:5432/vigia?sslmode=disable
@@ -42,11 +42,17 @@ sqlc: $(SQLC) ## regenerate type-safe queries
 	$(SQLC) generate
 
 # --- quality ---
+build: ## compile all Go packages and commands
+	go build ./...
+
 test:
 	go test ./...
 
 test-db: ## run all tests with local Postgres URLs exported
 	DATABASE_URL="$(DATABASE_URL)" APP_DATABASE_URL="$(APP_DATABASE_URL)" go test ./...
+
+eval-golden: ## run deterministic golden-set agreement gate
+	go run ./cmd/golden-eval
 
 test-rls: ## run database-backed RLS isolation tests through the restricted app role
 	DATABASE_URL="$(DATABASE_URL)" APP_DATABASE_URL="$(APP_DATABASE_URL)" go test ./internal/db ./internal/postgres -run 'TestRestrictedAppRoleIsLeastPrivilege|TestRLSIsolationForCurrentTenantInteractions|TestEvaluationRLSIsolationAcrossTenants|TestEvidenceRLSIsolationAcrossTenants' -count=1

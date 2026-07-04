@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  go-test:
-    name: Go tests
+  ci:
+    name: Build, test, and golden eval
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -43,5 +43,11 @@ jobs:
       - name: Apply database migrations
         run: make migrate-up
 
+      - name: Build
+        run: make build
+
       - name: Run tests
         run: go test ./...
+
+      - name: Run golden-set eval gate
+        run: make eval-golden
