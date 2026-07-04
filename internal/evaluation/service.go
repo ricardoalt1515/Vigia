@@ -34,6 +34,15 @@ var ErrMultipleJudgesNotSupported = errors.New("evaluation: multiple judges conf
 type NamedDetector struct {
 	Code     string
 	Detector detection.Detector
+
+	// RequiresHITL marks a detector whose catalog action mandates human
+	// review on a block (e.g. MX-REDECO-07's "HARD BLOCK + HITL" per
+	// docs/regulatory-ruleset.md:38). true is OR'd into the evaluation's
+	// requires_hitl only when THIS detector blocks; it is never set by any
+	// other detector's outcome and is never unset by this detector passing.
+	// The zero value (false) reproduces today's behavior for every other
+	// detector: a hard block alone does not require human review.
+	RequiresHITL bool
 }
 
 // DetectorResultInput is one detector's persisted result, already mapped
@@ -238,17 +247,34 @@ type detectorJudgeRun struct {
 func (s Service) runDetectorsAndJudges(ctx context.Context, interaction detection.Interaction, utterances []judge.Utterance) detectorJudgeRun {
 	overallOutcome := "pass"
 	results := make([]DetectorResultInput, 0, len(s.Detectors)+len(s.Judges))
+	requiresHITL := false
 
 	for _, nd := range s.Detectors {
 		res := nd.Detector.Evaluate(interaction)
 
+		// Explicit 3-way branch on detection.Outcome (block/warn/pass) — see
+		// design.md's "MX-REDECO-03 is warn-level" decision: a binary
+		// if(block)/else would silently collapse any future non-block,
+		// non-pass outcome into pass/low. Each branch below sets its own
+		// outcome/severity and its own effect (or lack of effect) on
+		// overallOutcome/requiresHITL, so adding a new detection.Outcome
+		// value in the future MUST be handled here explicitly, not fall
+		// through to a default.
 		var outcome core.DetectorOutcome
 		var severity core.Severity
-		if res.Outcome == detection.OutcomeBlock {
+		switch res.Outcome {
+		case detection.OutcomeBlock:
 			outcome = core.DetectorOutcomeFail
 			severity = core.SeverityHigh
 			overallOutcome = "fail"
-		} else {
+			if nd.RequiresHITL {
+				requiresHITL = true
+			}
+		case detection.OutcomeWarn:
+			outcome = core.DetectorOutcomeWarn
+			severity = core.SeverityMedium
+			// A warn row alone never flips overallOutcome or requiresHITL.
+		default: // detection.OutcomePass
 			outcome = core.DetectorOutcomePass
 			severity = core.SeverityLow
 		}
@@ -261,7 +287,6 @@ func (s Service) runDetectorsAndJudges(ctx context.Context, interaction detectio
 		})
 	}
 
-	requiresHITL := false
 	var judgeModelID, rubricVersion string
 	var judgeConfidence *float64
 

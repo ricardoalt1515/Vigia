@@ -63,6 +63,8 @@ func run(ctx context.Context) error {
 			{Code: "contact-hours", Detector: detection.ContactHoursDetector{
 				Window: detection.Window{StartHour: 8, EndHour: 21},
 			}},
+			{Code: "MX-REDECO-06", Detector: detection.ThirdPartyContactDetector{}},
+			{Code: "MX-REDECO-07", Detector: detection.ProtectedPopulationDetector{}, RequiresHITL: true},
 		},
 		Judges: []evaluation.NamedJudge{
 			{Code: "MX-REDECO-05", Judge: buildJudge(cfg)},

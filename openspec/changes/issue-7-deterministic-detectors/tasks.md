@@ -38,15 +38,15 @@ Chain strategy: pending
 
 ## Phase 2a (PR2a): Third-Party + Protected Population, Outcome/HITL Plumbing
 
-- [ ] 2a.1 Add `Channel`, `ContactPartyRelationship`, `ContactedPartyDOB`, `AuthorizedChannels`, `PaymentRecipient`, `DisclosureProvided` to `detection.Interaction`; add `OutcomeWarn` to `Outcome` enum (`internal/detection/detector.go`).
-- [ ] 2a.2 [RED] Write table-driven tests + `TestXNoIO` for third-party detector (MX-REDECO-06): debtor/authorized/unknown/missing scenarios.
-- [ ] 2a.3 [GREEN] Implement `internal/detection/third_party.go`.
-- [ ] 2a.4 [RED] Write table-driven tests + `TestXNoIO` for protected-population detector (MX-REDECO-07): minor-always-block, elderly-debtor-pass, elderly-non-debtor-block, adult-pass, debtor-missing-DOB-pass, non-debtor-missing-DOB-block, OccurredAt-relative age.
-- [ ] 2a.5 [GREEN] Implement `internal/detection/protected_population.go` with `legalMajorityAge=18`, `elderlyAge=60` constants.
-- [ ] 2a.6 Add `core.DetectorOutcomeWarn` (`internal/core/types.go`).
-- [ ] 2a.7 Restructure `internal/evaluation/service.go` fold into 3-way branch (block/warn/pass); add `RequiresHITL bool` to `NamedDetector`, OR into `requiresHITL` on MX-REDECO-07 block only.
-- [ ] 2a.8 Wire both detectors in `cmd/api/main.go` + `cmd/seed/main.go` with `RequiresHITL: true` on MX-REDECO-07 only.
-- [ ] 2a.9 [integration] Test: MX-REDECO-07 block sets `requires_hitl=true`; other blocks leave it `false`.
+- [x] 2a.1 Add `Channel`, `ContactPartyRelationship`, `ContactedPartyDOB`, `AuthorizedChannels`, `PaymentRecipient`, `DisclosureProvided` to `detection.Interaction`; add `OutcomeWarn` to `Outcome` enum (`internal/detection/detector.go`).
+- [x] 2a.2 [RED] Write table-driven tests + `TestXNoIO` for third-party detector (MX-REDECO-06): debtor/authorized/unknown/missing scenarios.
+- [x] 2a.3 [GREEN] Implement `internal/detection/third_party.go`.
+- [x] 2a.4 [RED] Write table-driven tests + `TestXNoIO` for protected-population detector (MX-REDECO-07): minor-always-block, elderly-debtor-pass, elderly-non-debtor-block, adult-pass, debtor-missing-DOB-pass, non-debtor-missing-DOB-block, OccurredAt-relative age.
+- [x] 2a.5 [GREEN] Implement `internal/detection/protected_population.go` with `legalMajorityAge=18`, `elderlyAge=60` constants.
+- [x] 2a.6 Add `core.DetectorOutcomeWarn` (`internal/core/types.go`).
+- [x] 2a.7 Restructure `internal/evaluation/service.go` fold into 3-way branch (block/warn/pass); add `RequiresHITL bool` to `NamedDetector`, OR into `requiresHITL` on MX-REDECO-07 block only.
+- [x] 2a.8 Wire both detectors in `cmd/api/main.go` + `cmd/seed/main.go` with `RequiresHITL: true` on MX-REDECO-07 only.
+- [x] 2a.9 [integration] Test: MX-REDECO-07 block sets `requires_hitl=true`; other blocks leave it `false`. (Implemented as pure Service-level unit tests with a fake EvaluationStore — no real Postgres needed, since NamedDetector/RequiresHITL and the fold are pure logic; see `internal/evaluation/service_test.go`.)
 
 ## Phase 2b (PR2b): Authorized Channel + Payment Routing
 

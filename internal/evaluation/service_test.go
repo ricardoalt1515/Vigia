@@ -163,6 +163,118 @@ func TestServiceEvaluateInteraction(t *testing.T) {
 		}
 	})
 
+	t.Run("warn outcome maps to warn severity medium and does not flip overall outcome", func(t *testing.T) {
+		store := &fakeEvaluationStore{}
+		svc := evaluation.Service{
+			Detectors: []evaluation.NamedDetector{
+				{Code: "contact-hours", Detector: fakeDetector{result: detection.Result{Outcome: detection.OutcomePass}}},
+				{Code: "MX-REDECO-03", Detector: fakeDetector{result: detection.Result{
+					Outcome:   detection.OutcomeWarn,
+					Rationale: "disclosure not stated",
+				}}},
+			},
+			Store: store,
+		}
+
+		got, err := svc.EvaluateInteraction(context.Background(), evaluation.EvaluateInteractionInput{
+			TenantID:           "tenant-a",
+			InteractionEventID: "interaction-warn",
+			Interaction:        interaction,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.OverallOutcome != "pass" {
+			t.Fatalf("OverallOutcome = %q, want %q — a warn row alone must not flip overall outcome", got.OverallOutcome, "pass")
+		}
+		var warnRow *evaluation.DetectorResultInput
+		for i, row := range store.calls[0].DetectorResults {
+			if row.DetectorCode == "MX-REDECO-03" {
+				warnRow = &store.calls[0].DetectorResults[i]
+			}
+		}
+		if warnRow == nil {
+			t.Fatal("no detector result row carries the MX-REDECO-03 code")
+		}
+		if warnRow.Outcome != core.DetectorOutcomeWarn {
+			t.Errorf("Outcome = %q, want %q", warnRow.Outcome, core.DetectorOutcomeWarn)
+		}
+		if warnRow.Severity != core.SeverityMedium {
+			t.Errorf("Severity = %q, want %q", warnRow.Severity, core.SeverityMedium)
+		}
+	})
+
+	t.Run("warn row coexisting with a hard-block row yields overall fail", func(t *testing.T) {
+		store := &fakeEvaluationStore{}
+		svc := evaluation.Service{
+			Detectors: []evaluation.NamedDetector{
+				{Code: "MX-REDECO-06", Detector: fakeDetector{result: detection.Result{Outcome: detection.OutcomeBlock}}},
+				{Code: "MX-REDECO-03", Detector: fakeDetector{result: detection.Result{Outcome: detection.OutcomeWarn}}},
+			},
+			Store: store,
+		}
+
+		got, err := svc.EvaluateInteraction(context.Background(), evaluation.EvaluateInteractionInput{
+			TenantID:           "tenant-a",
+			InteractionEventID: "interaction-warn-and-block",
+			Interaction:        interaction,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.OverallOutcome != "fail" {
+			t.Fatalf("OverallOutcome = %q, want %q — driven by the hard-block detector", got.OverallOutcome, "fail")
+		}
+		if len(store.calls[0].DetectorResults) != 2 {
+			t.Fatalf("DetectorResults len = %d, want 2 (one fail row + one warn row)", len(store.calls[0].DetectorResults))
+		}
+	})
+
+	t.Run("MX-REDECO-07 block sets requires_hitl true", func(t *testing.T) {
+		store := &fakeEvaluationStore{}
+		svc := evaluation.Service{
+			Detectors: []evaluation.NamedDetector{
+				{Code: "MX-REDECO-07", Detector: fakeDetector{result: detection.Result{Outcome: detection.OutcomeBlock}}, RequiresHITL: true},
+			},
+			Store: store,
+		}
+
+		_, err := svc.EvaluateInteraction(context.Background(), evaluation.EvaluateInteractionInput{
+			TenantID:           "tenant-a",
+			InteractionEventID: "interaction-hitl",
+			Interaction:        interaction,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !store.calls[0].RequiresHITL {
+			t.Fatalf("call.RequiresHITL = %v, want true", store.calls[0].RequiresHITL)
+		}
+	})
+
+	t.Run("other detectors' blocks do not set requires_hitl", func(t *testing.T) {
+		store := &fakeEvaluationStore{}
+		svc := evaluation.Service{
+			Detectors: []evaluation.NamedDetector{
+				{Code: "MX-REDECO-06", Detector: fakeDetector{result: detection.Result{Outcome: detection.OutcomeBlock}}},
+				{Code: "MX-REDECO-07", Detector: fakeDetector{result: detection.Result{Outcome: detection.OutcomePass}}, RequiresHITL: true},
+			},
+			Store: store,
+		}
+
+		_, err := svc.EvaluateInteraction(context.Background(), evaluation.EvaluateInteractionInput{
+			TenantID:           "tenant-a",
+			InteractionEventID: "interaction-no-hitl",
+			Interaction:        interaction,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if store.calls[0].RequiresHITL {
+			t.Fatalf("call.RequiresHITL = %v, want false — only MX-REDECO-07's own block sets it", store.calls[0].RequiresHITL)
+		}
+	})
+
 	t.Run("no detectors configured returns error without persisting", func(t *testing.T) {
 		store := &fakeEvaluationStore{}
 		svc := evaluation.Service{
