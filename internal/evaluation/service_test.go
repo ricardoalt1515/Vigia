@@ -275,6 +275,41 @@ func TestServiceEvaluateInteraction(t *testing.T) {
 		}
 	})
 
+	t.Run("unrecognized outcome value fails closed to fail severity high", func(t *testing.T) {
+		store := &fakeEvaluationStore{}
+		svc := evaluation.Service{
+			Detectors: []evaluation.NamedDetector{
+				{Code: "bogus-detector", Detector: fakeDetector{result: detection.Result{
+					Outcome:   detection.Outcome("bogus"),
+					Rationale: "unrecognized test outcome",
+				}}},
+			},
+			Store: store,
+		}
+
+		got, err := svc.EvaluateInteraction(context.Background(), evaluation.EvaluateInteractionInput{
+			TenantID:           "tenant-a",
+			InteractionEventID: "interaction-bogus",
+			Interaction:        interaction,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.OverallOutcome != "fail" {
+			t.Fatalf("OverallOutcome = %q, want %q — an unrecognized outcome MUST fail closed", got.OverallOutcome, "fail")
+		}
+		row := store.calls[0].DetectorResults[0]
+		if row.Outcome != core.DetectorOutcomeFail {
+			t.Errorf("Outcome = %q, want %q", row.Outcome, core.DetectorOutcomeFail)
+		}
+		if row.Severity != core.SeverityHigh {
+			t.Errorf("Severity = %q, want %q", row.Severity, core.SeverityHigh)
+		}
+		if !strings.Contains(row.Rationale, "bogus") {
+			t.Errorf("Rationale = %q, want it to mention the unrecognized outcome value", row.Rationale)
+		}
+	})
+
 	t.Run("no detectors configured returns error without persisting", func(t *testing.T) {
 		store := &fakeEvaluationStore{}
 		svc := evaluation.Service{

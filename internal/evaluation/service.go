@@ -7,6 +7,7 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/ricardoalt1515/vigia/internal/core"
@@ -252,16 +253,21 @@ func (s Service) runDetectorsAndJudges(ctx context.Context, interaction detectio
 	for _, nd := range s.Detectors {
 		res := nd.Detector.Evaluate(interaction)
 
-		// Explicit 3-way branch on detection.Outcome (block/warn/pass) — see
-		// design.md's "MX-REDECO-03 is warn-level" decision: a binary
-		// if(block)/else would silently collapse any future non-block,
-		// non-pass outcome into pass/low. Each branch below sets its own
-		// outcome/severity and its own effect (or lack of effect) on
-		// overallOutcome/requiresHITL, so adding a new detection.Outcome
-		// value in the future MUST be handled here explicitly, not fall
-		// through to a default.
+		// Explicit branch on detection.Outcome (block/warn/pass), plus a
+		// fail-closed default — see design.md's "MX-REDECO-03 is warn-level"
+		// decision: a binary if(block)/else would silently collapse any
+		// future non-block, non-pass outcome into pass/low. Each recognized
+		// case below sets its own outcome/severity and its own effect (or
+		// lack of effect) on overallOutcome/requiresHITL, so adding a new
+		// detection.Outcome value in the future MUST be handled here
+		// explicitly, not left to fall through. default is intentionally
+		// fail-closed (never fail-open): an unrecognized outcome value can
+		// only reach here via a bug or an unwired future detection.Outcome,
+		// and silently treating that as a pass would hide the gap instead of
+		// surfacing it.
 		var outcome core.DetectorOutcome
 		var severity core.Severity
+		rationale := res.Rationale
 		switch res.Outcome {
 		case detection.OutcomeBlock:
 			outcome = core.DetectorOutcomeFail
@@ -274,16 +280,25 @@ func (s Service) runDetectorsAndJudges(ctx context.Context, interaction detectio
 			outcome = core.DetectorOutcomeWarn
 			severity = core.SeverityMedium
 			// A warn row alone never flips overallOutcome or requiresHITL.
-		default: // detection.OutcomePass
+		case detection.OutcomePass:
 			outcome = core.DetectorOutcomePass
 			severity = core.SeverityLow
+		default:
+			outcome = core.DetectorOutcomeFail
+			severity = core.SeverityHigh
+			overallOutcome = "fail"
+			rationale = fmt.Sprintf("fail-closed: detector %q returned an unrecognized outcome %q: %s", nd.Code, res.Outcome, res.Rationale)
+			s.logger().Error("evaluation.unrecognized_detector_outcome",
+				"detector_code", nd.Code,
+				"outcome", string(res.Outcome),
+			)
 		}
 
 		results = append(results, DetectorResultInput{
 			DetectorCode: nd.Code,
 			Outcome:      outcome,
 			Severity:     severity,
-			Rationale:    res.Rationale,
+			Rationale:    rationale,
 		})
 	}
 
