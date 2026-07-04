@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ricardoalt1515/vigia/internal/auth"
+	"github.com/ricardoalt1515/vigia/internal/core"
+	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
 )
 
@@ -24,6 +26,11 @@ type Interaction struct {
 	Reason        *string   `json:"reason"`
 	RequiresHITL  *bool     `json:"requires_hitl"`
 	ThreatFlagged *bool     `json:"threat_flagged"`
+	// PolicyBundleVersion is nil when the interaction has not been
+	// evaluated (no evaluation row), and the stored (possibly empty-string
+	// sentinel) value when it has — the empty string is a real, distinct
+	// value from nil, never coerced to either extreme (issue #6).
+	PolicyBundleVersion *string `json:"policy_bundle_version"`
 }
 
 type InteractionReader interface {
@@ -52,25 +59,39 @@ type EvidenceReader interface {
 	GetEvidencePackage(ctx context.Context, tenantID, interactionID string) (ledger.Package, error)
 }
 
+// ReEvaluator reruns the wired detectors/judge against a historical
+// interaction and stamps a caller-supplied historical PolicyBundle version
+// onto the (unpersisted) result (issue #6). Implementations resolve the
+// interaction's owning tenant internally — the handler independently
+// verifies the returned core.Evaluation.TenantID matches the authenticated
+// caller before responding, so a result belonging to another tenant can
+// never leak.
+type ReEvaluator interface {
+	ReEvaluateInteraction(ctx context.Context, tenantID, interactionID, policyBundleID string) (core.Evaluation, error)
+}
+
 type Server struct {
 	authenticator *auth.Authenticator
 	interactions  InteractionReader
 	summary       SummaryReader
 	evidence      EvidenceReader
+	reevaluator   ReEvaluator
 	mux           *http.ServeMux
 }
 
-func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader, evidence EvidenceReader) *Server {
+func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader, evidence EvidenceReader, reevaluator ReEvaluator) *Server {
 	s := &Server{
 		authenticator: authenticator,
 		interactions:  interactions,
 		summary:       summary,
 		evidence:      evidence,
+		reevaluator:   reevaluator,
 		mux:           http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /v1/interactions", s.handleGetInteractions)
 	s.mux.HandleFunc("GET /v1/summary", s.handleGetSummary)
 	s.mux.HandleFunc("GET /v1/interactions/{id}/evidence", s.handleGetEvidence)
+	s.mux.HandleFunc("POST /v1/interactions/{id}/reevaluate", s.handleReEvaluate)
 	return s
 }
 
@@ -156,6 +177,77 @@ func (s *Server) handleGetEvidence(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(pkg); err != nil {
+		return
+	}
+}
+
+// reevaluateRequest is the POST /v1/interactions/{id}/reevaluate request
+// body: the historical bundle to rerun the evaluation against.
+type reevaluateRequest struct {
+	PolicyBundleID string `json:"policy_bundle_id"`
+}
+
+// reevaluateResponse is the stamped, unpersisted evaluation result.
+// PolicyBundleID is nil only in the theoretical case a ReEvaluator returns
+// no bundle id — in practice a successful ReEvaluateInteraction call always
+// stamps the caller-supplied bundle id.
+type reevaluateResponse struct {
+	OverallOutcome      string  `json:"overall_outcome"`
+	PolicyBundleVersion string  `json:"policy_bundle_version"`
+	PolicyBundleID      *string `json:"policy_bundle_id"`
+}
+
+func (s *Server) handleReEvaluate(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	var req reevaluateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+
+	id := r.PathValue("id")
+	got, err := s.reevaluator.ReEvaluateInteraction(r.Context(), tenant.TenantID, id, req.PolicyBundleID)
+	if err != nil {
+		if errors.Is(err, evaluation.ErrInteractionNotFound) || errors.Is(err, evaluation.ErrPolicyBundleNotFound) {
+			writeError(w, http.StatusNotFound)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	// The tenant scoping already happened before any bundle/detector/judge
+	// work ran, inside ReEvaluateInteraction's tenant-scoped interaction
+	// lookup (a foreign-tenant interactionID resolves to
+	// ErrInteractionNotFound, handled above). This is a defense-in-depth
+	// check on the returned result only, mirroring handleGetEvidence's
+	// tenant-scoped lookup precedent — it should never trigger in practice.
+	if string(got.TenantID) != tenant.TenantID {
+		writeError(w, http.StatusNotFound)
+		return
+	}
+
+	var policyBundleID *string
+	if got.PolicyBundleID != nil {
+		id := string(*got.PolicyBundleID)
+		policyBundleID = &id
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(reevaluateResponse{
+		OverallOutcome:      got.OverallOutcome,
+		PolicyBundleVersion: got.PolicyBundleVersion,
+		PolicyBundleID:      policyBundleID,
+	}); err != nil {
 		return
 	}
 }

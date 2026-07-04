@@ -7,6 +7,7 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/ricardoalt1515/vigia/internal/core"
 	"github.com/ricardoalt1515/vigia/internal/detection"
@@ -70,6 +71,21 @@ type CreateEvaluationInput struct {
 	JudgeModelID    string
 	RubricVersion   string
 	JudgeConfidence *float64
+
+	// PolicyBundleVersion and PolicyBundleID are issue #6 additions: the
+	// resolved active bundle's version string + FK id, stamped by
+	// EvaluateInteraction via Service.Resolver. Empty string/nil reproduce
+	// today's no-active-bundle sentinel exactly (Design Decision 3).
+	PolicyBundleVersion string
+	PolicyBundleID      *string
+}
+
+// BundleResolver resolves the current active PolicyBundle for a tenant.
+// found=false (no active bundle) and a nil Service.Resolver both keep the
+// existing empty-string/nil sentinel path unchanged (Design Decision 3/4):
+// evaluation must never hard-fail solely because no bundle is configured.
+type BundleResolver interface {
+	ActiveBundle(ctx context.Context, tenantID string) (version, id string, found bool, err error)
 }
 
 // EvaluationStore persists an evaluation. Implementations (internal/postgres)
@@ -109,6 +125,37 @@ type Service struct {
 	// JudgeInput. Zero value is safe when no Judges are configured.
 	Rubric judge.Rubric
 	Store  EvaluationStore
+
+	// Resolver resolves the tenant's active PolicyBundle for stamping
+	// (issue #6). Nil is safe: no stamping occurs, reproducing the exact
+	// pre-#6 sentinel behavior so existing table-driven tests stay green
+	// with no resolver configured (Design Decision 4).
+	Resolver BundleResolver
+
+	// Interactions and Bundles are used only by ReEvaluateInteraction
+	// (issue #6): Interactions resolves the historical interaction's
+	// tenant/payload by id, Bundles validates the caller-supplied
+	// policyBundleID belongs to that tenant and resolves its version
+	// string. Both are required for ReEvaluateInteraction; EvaluateInteraction
+	// never touches them.
+	Interactions InteractionLookup
+	Bundles      BundleVersionLookup
+
+	// Logger records resolveActiveBundle's error path (a real resolver/DB
+	// error, as opposed to the expected "no active bundle configured" case)
+	// distinctly, so an operator can tell the two apart in production even
+	// though both fail open to the same ""/nil sentinel (Design Decision
+	// 3). Nil is safe: slog.Default() is used instead, so existing callers
+	// that never set Logger are unaffected.
+	Logger *slog.Logger
+}
+
+// logger returns s.Logger, falling back to slog.Default() when unset.
+func (s Service) logger() *slog.Logger {
+	if s.Logger != nil {
+		return s.Logger
+	}
+	return slog.Default()
 }
 
 // judgeFailureRationale renders a fail-closed rationale that names the
@@ -151,11 +198,49 @@ func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteraction
 		return core.Evaluation{}, ErrMultipleJudgesNotSupported
 	}
 
+	run := s.runDetectorsAndJudges(ctx, in.Interaction, in.Utterances)
+
+	policyBundleVersion, policyBundleID := s.resolveActiveBundle(ctx, in.TenantID)
+
+	return s.Store.CreateEvaluation(ctx, CreateEvaluationInput{
+		TenantID:            in.TenantID,
+		InteractionEventID:  in.InteractionEventID,
+		OverallOutcome:      run.overallOutcome,
+		DetectorResults:     run.results,
+		RequiresHITL:        run.requiresHITL,
+		JudgeModelID:        run.judgeModelID,
+		RubricVersion:       run.rubricVersion,
+		JudgeConfidence:     run.judgeConfidence,
+		PolicyBundleVersion: policyBundleVersion,
+		PolicyBundleID:      policyBundleID,
+	})
+}
+
+// detectorJudgeRun is the shared, side-effect-free result of running every
+// configured detector then every configured judge over one interaction. It
+// is reused by both EvaluateInteraction (which persists it) and
+// ReEvaluateInteraction (which does not), so the two entry points can never
+// drift on outcome-folding logic.
+type detectorJudgeRun struct {
+	overallOutcome  string
+	results         []DetectorResultInput
+	requiresHITL    bool
+	judgeModelID    string
+	rubricVersion   string
+	judgeConfidence *float64
+}
+
+// runDetectorsAndJudges runs every s.Detectors entry over interaction, then
+// every s.Judges entry over utterances as a distinct typed step, applying
+// the same fail-closed folding EvaluateInteraction has always used. It has
+// no side effects (no store call, no bundle resolution) so callers control
+// persistence independently.
+func (s Service) runDetectorsAndJudges(ctx context.Context, interaction detection.Interaction, utterances []judge.Utterance) detectorJudgeRun {
 	overallOutcome := "pass"
 	results := make([]DetectorResultInput, 0, len(s.Detectors)+len(s.Judges))
 
 	for _, nd := range s.Detectors {
-		res := nd.Detector.Evaluate(in.Interaction)
+		res := nd.Detector.Evaluate(interaction)
 
 		var outcome core.DetectorOutcome
 		var severity core.Severity
@@ -182,7 +267,7 @@ func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteraction
 
 	for _, nj := range s.Judges {
 		res, err := nj.Judge.Evaluate(ctx, judge.JudgeInput{
-			Utterances: in.Utterances,
+			Utterances: utterances,
 			Rubric:     s.Rubric,
 		})
 		// judgeModelID/rubricVersion are recorded from every attempt — success
@@ -227,14 +312,131 @@ func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteraction
 		judgeConfidence = &confidence
 	}
 
-	return s.Store.CreateEvaluation(ctx, CreateEvaluationInput{
-		TenantID:           in.TenantID,
-		InteractionEventID: in.InteractionEventID,
-		OverallOutcome:     overallOutcome,
-		DetectorResults:    results,
-		RequiresHITL:       requiresHITL,
-		JudgeModelID:       judgeModelID,
-		RubricVersion:      rubricVersion,
-		JudgeConfidence:    judgeConfidence,
-	})
+	return detectorJudgeRun{
+		overallOutcome:  overallOutcome,
+		results:         results,
+		requiresHITL:    requiresHITL,
+		judgeModelID:    judgeModelID,
+		rubricVersion:   rubricVersion,
+		judgeConfidence: judgeConfidence,
+	}
+}
+
+// ErrInteractionNotFound is returned by ReEvaluateInteraction when
+// s.Interactions has no record for the given interactionID.
+var ErrInteractionNotFound = errors.New("evaluation: interaction not found")
+
+// ErrPolicyBundleNotFound is returned by ReEvaluateInteraction when the
+// requested policyBundleID does not resolve for the interaction's tenant.
+// This covers both "no such bundle" and "bundle belongs to a different
+// tenant" — both collapse to the same error so nothing about another
+// tenant's bundle existence leaks (mirrors httpapi.ErrEvidenceNotFound's
+// generic-404 precedent).
+var ErrPolicyBundleNotFound = errors.New("evaluation: policy bundle not found")
+
+// ReEvaluationInput is what ReEvaluateInteraction needs to rerun the wired
+// detectors/judge for a historical interaction: the tenant it belongs to
+// (resolved internally, not supplied by the caller) plus the pure
+// detection.Interaction payload and any transcript utterances.
+type ReEvaluationInput struct {
+	TenantID    string
+	Interaction detection.Interaction
+	Utterances  []judge.Utterance
+}
+
+// InteractionLookup resolves a previously-recorded interaction by id,
+// scoped to the authenticated tenant, for ReEvaluateInteraction.
+// found=false means no such interaction exists for that tenant — this
+// covers both "no such interaction" and "interaction belongs to a
+// different tenant" so a foreign-tenant interaction id is
+// indistinguishable from an unknown one (mirrors ErrPolicyBundleNotFound's
+// same collapsing behavior).
+type InteractionLookup interface {
+	GetInteractionForReEvaluation(ctx context.Context, tenantID, interactionID string) (ReEvaluationInput, bool, error)
+}
+
+// BundleVersionLookup resolves a specific historical PolicyBundle's version
+// string by id, scoped to a tenant. found=false covers both "no such
+// bundle" and "bundle belongs to a different tenant".
+type BundleVersionLookup interface {
+	BundleVersionByID(ctx context.Context, tenantID, policyBundleID string) (version string, found bool, err error)
+}
+
+// ReEvaluateInteraction reruns the currently-wired detectors/judge against a
+// previously-recorded interaction and stamps the caller-supplied historical
+// policyBundleID/version onto the resulting evaluation (spec: "Reproducible
+// Re-Evaluation Against a Specific Bundle Version"). It does NOT persist:
+// s.Store.CreateEvaluation is never called here — the returned
+// core.Evaluation exists only to prove the stamping mechanism is
+// reproducible (Design Decision 5). It does not select detectors/rubric
+// based on bundle rule content: the same wired pipeline always runs,
+// independent of which historical bundle is requested.
+//
+// tenantID is the authenticated caller's tenant. It is checked FIRST, via
+// the tenant-scoped s.Interactions lookup, before any bundle lookup or
+// detector/judge execution runs — a foreign-tenant or unknown
+// interactionID resolves to ErrInteractionNotFound without ever invoking a
+// detector or the judge (judgment-day finding: sending another tenant's
+// transcript to an external LLM judge before the tenant check is a data
+// leak, not just an authorization gap).
+func (s Service) ReEvaluateInteraction(ctx context.Context, tenantID, interactionID, policyBundleID string) (core.Evaluation, error) {
+	if len(s.Detectors) == 0 {
+		return core.Evaluation{}, ErrNoDetectors
+	}
+	if len(s.Judges) > 1 {
+		return core.Evaluation{}, ErrMultipleJudgesNotSupported
+	}
+
+	reInput, found, err := s.Interactions.GetInteractionForReEvaluation(ctx, tenantID, interactionID)
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+	if !found {
+		return core.Evaluation{}, ErrInteractionNotFound
+	}
+
+	version, found, err := s.Bundles.BundleVersionByID(ctx, tenantID, policyBundleID)
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+	if !found {
+		return core.Evaluation{}, ErrPolicyBundleNotFound
+	}
+
+	run := s.runDetectorsAndJudges(ctx, reInput.Interaction, reInput.Utterances)
+
+	bundleID := core.ID(policyBundleID)
+	return core.Evaluation{
+		TenantID:            core.ID(reInput.TenantID),
+		InteractionEventID:  core.ID(interactionID),
+		OverallOutcome:      run.overallOutcome,
+		PolicyBundleVersion: version,
+		PolicyBundleID:      &bundleID,
+	}, nil
+}
+
+// resolveActiveBundle stamps the tenant's active bundle version + id via
+// s.Resolver, degrading to the existing ""/nil sentinel on a nil resolver,
+// not-found, or resolver error (Design Decision 3: a missing or erroring
+// bundle resolution must never hard-fail EvaluateInteraction). A resolver
+// error is logged distinctly from the expected not-found case (judgment-day
+// finding: silently folding a real DB/resolver failure into "no active
+// bundle" hides operational problems), but never changes the returned
+// sentinel — ledger golden hashes must stay byte-identical either way.
+func (s Service) resolveActiveBundle(ctx context.Context, tenantID string) (version string, id *string) {
+	if s.Resolver == nil {
+		return "", nil
+	}
+	v, bundleID, found, err := s.Resolver.ActiveBundle(ctx, tenantID)
+	if err != nil {
+		s.logger().Error("evaluation.resolve_active_bundle_failed",
+			"tenant_id", tenantID,
+			"err", err.Error(),
+		)
+		return "", nil
+	}
+	if !found {
+		return "", nil
+	}
+	return v, &bundleID
 }

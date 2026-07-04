@@ -12,27 +12,55 @@ import (
 )
 
 const addPolicyBundleRule = `-- name: AddPolicyBundleRule :one
-INSERT INTO policy_bundle_rules (tenant_id, policy_bundle_id, policy_rule_id)
-VALUES ($1, $2, $3)
-RETURNING tenant_id, policy_bundle_id, policy_rule_id, created_at
+INSERT INTO policy_bundle_rules (tenant_id, policy_bundle_id, policy_rule_id, effective_date, legal_basis)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING tenant_id, policy_bundle_id, policy_rule_id, created_at, effective_date, legal_basis
 `
 
 type AddPolicyBundleRuleParams struct {
 	TenantID       pgtype.UUID `json:"tenant_id"`
 	PolicyBundleID pgtype.UUID `json:"policy_bundle_id"`
 	PolicyRuleID   pgtype.UUID `json:"policy_rule_id"`
+	EffectiveDate  pgtype.Date `json:"effective_date"`
+	LegalBasis     string      `json:"legal_basis"`
 }
 
 func (q *Queries) AddPolicyBundleRule(ctx context.Context, arg AddPolicyBundleRuleParams) (PolicyBundleRule, error) {
-	row := q.db.QueryRow(ctx, addPolicyBundleRule, arg.TenantID, arg.PolicyBundleID, arg.PolicyRuleID)
+	row := q.db.QueryRow(ctx, addPolicyBundleRule,
+		arg.TenantID,
+		arg.PolicyBundleID,
+		arg.PolicyRuleID,
+		arg.EffectiveDate,
+		arg.LegalBasis,
+	)
 	var i PolicyBundleRule
 	err := row.Scan(
 		&i.TenantID,
 		&i.PolicyBundleID,
 		&i.PolicyRuleID,
 		&i.CreatedAt,
+		&i.EffectiveDate,
+		&i.LegalBasis,
 	)
 	return i, err
+}
+
+const countBundleVersions = `-- name: CountBundleVersions :one
+SELECT count(*) FROM policy_bundles WHERE tenant_id = $1 AND name = $2
+`
+
+type CountBundleVersionsParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Name     string      `json:"name"`
+}
+
+// Scoped to (tenant_id, name): CreateBundleVersion numbers new versions per
+// bundle name, not globally per tenant.
+func (q *Queries) CountBundleVersions(ctx context.Context, arg CountBundleVersionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countBundleVersions, arg.TenantID, arg.Name)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createPolicyBundle = `-- name: CreatePolicyBundle :one
@@ -99,8 +127,63 @@ func (q *Queries) CreatePolicyRule(ctx context.Context, arg CreatePolicyRulePara
 	return i, err
 }
 
+const getActiveBundleByTenant = `-- name: GetActiveBundleByTenant :one
+SELECT id, tenant_id, name, version, status, created_at
+FROM policy_bundles
+WHERE tenant_id = $1 AND status = 'active'
+`
+
+// Resolves THE active bundle for a tenant (Design Decision 3/4): today's
+// BundleResolver seam resolves per-tenant only, with no bundle "name" input.
+// If a tenant were to ever activate more than one named bundle
+// simultaneously this returns a SQL "too many rows" error rather than
+// silently picking one; that constraint is out of scope for issue #6.
+func (q *Queries) GetActiveBundleByTenant(ctx context.Context, tenantID pgtype.UUID) (PolicyBundle, error) {
+	row := q.db.QueryRow(ctx, getActiveBundleByTenant, tenantID)
+	var i PolicyBundle
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Name,
+		&i.Version,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getPolicyBundleByID = `-- name: GetPolicyBundleByID :one
+SELECT id, tenant_id, name, version, status, created_at
+FROM policy_bundles
+WHERE id = $1 AND tenant_id = $2
+`
+
+type GetPolicyBundleByIDParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+// ReEvaluateInteraction's historical-bundle validation (issue #6): scoped to
+// (id, tenant_id) so a foreign-tenant bundle id naturally resolves to
+// pgx.ErrNoRows — the same "not found" outcome as a truly unknown id, never
+// leaking whether the bundle exists for a different tenant.
+func (q *Queries) GetPolicyBundleByID(ctx context.Context, arg GetPolicyBundleByIDParams) (PolicyBundle, error) {
+	row := q.db.QueryRow(ctx, getPolicyBundleByID, arg.ID, arg.TenantID)
+	var i PolicyBundle
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Name,
+		&i.Version,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listPolicyBundleRulesByTenant = `-- name: ListPolicyBundleRulesByTenant :many
 SELECT pbr.tenant_id, pbr.policy_bundle_id, pbr.policy_rule_id, pbr.created_at,
+       pbr.effective_date, pbr.legal_basis,
        pr.code, pr.title, pr.description, pr.severity
 FROM policy_bundle_rules pbr
 JOIN policy_rules pr ON pr.id = pbr.policy_rule_id
@@ -113,6 +196,8 @@ type ListPolicyBundleRulesByTenantRow struct {
 	PolicyBundleID pgtype.UUID        `json:"policy_bundle_id"`
 	PolicyRuleID   pgtype.UUID        `json:"policy_rule_id"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	EffectiveDate  pgtype.Date        `json:"effective_date"`
+	LegalBasis     string             `json:"legal_basis"`
 	Code           string             `json:"code"`
 	Title          string             `json:"title"`
 	Description    string             `json:"description"`
@@ -133,6 +218,8 @@ func (q *Queries) ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pg
 			&i.PolicyBundleID,
 			&i.PolicyRuleID,
 			&i.CreatedAt,
+			&i.EffectiveDate,
+			&i.LegalBasis,
 			&i.Code,
 			&i.Title,
 			&i.Description,
@@ -146,4 +233,54 @@ func (q *Queries) ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pg
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockActivePolicyBundle = `-- name: LockActivePolicyBundle :one
+SELECT id, tenant_id, name, version, status, created_at
+FROM policy_bundles
+WHERE tenant_id = $1 AND name = $2 AND status = 'active'
+FOR UPDATE
+`
+
+type LockActivePolicyBundleParams struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Name     string      `json:"name"`
+}
+
+// CreateBundleVersion's serialization point (Design Decision 6): locks the
+// prior active row scoped to (tenant_id, name) so two concurrent
+// CreateBundleVersion calls for the same bundle name never both supersede
+// and insert at once. Returns pgx.ErrNoRows when no prior active bundle
+// exists yet (the first version for this name) — the caller proceeds
+// without a row to supersede.
+func (q *Queries) LockActivePolicyBundle(ctx context.Context, arg LockActivePolicyBundleParams) (PolicyBundle, error) {
+	row := q.db.QueryRow(ctx, lockActivePolicyBundle, arg.TenantID, arg.Name)
+	var i PolicyBundle
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Name,
+		&i.Version,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const supersedePolicyBundle = `-- name: SupersedePolicyBundle :exec
+UPDATE policy_bundles SET status = 'superseded' WHERE id = $1 AND tenant_id = $2
+`
+
+type SupersedePolicyBundleParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+// Status-only update along the allowed active->superseded transition (the
+// one carve-out policy_bundles_guard_mutation permits). MUST run before the
+// new active row is inserted: the partial unique index
+// policy_bundles_one_active_per_tenant_name is non-deferrable.
+func (q *Queries) SupersedePolicyBundle(ctx context.Context, arg SupersedePolicyBundleParams) error {
+	_, err := q.db.Exec(ctx, supersedePolicyBundle, arg.ID, arg.TenantID)
+	return err
 }

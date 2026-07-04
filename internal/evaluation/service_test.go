@@ -14,11 +14,18 @@ import (
 )
 
 // fakeDetector returns a canned detection.Result regardless of input.
+// calls is an optional *int counter (nil-safe) so tests can assert a
+// detector was never invoked (e.g. a tenant check short-circuiting before
+// the pipeline runs).
 type fakeDetector struct {
 	result detection.Result
+	calls  *int
 }
 
 func (f fakeDetector) Evaluate(in detection.Interaction) detection.Result {
+	if f.calls != nil {
+		*f.calls++
+	}
 	return f.result
 }
 

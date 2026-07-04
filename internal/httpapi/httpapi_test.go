@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/ricardoalt1515/vigia/internal/auth"
+	"github.com/ricardoalt1515/vigia/internal/core"
+	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
 )
 
@@ -59,7 +61,7 @@ func TestGetInteractions(t *testing.T) {
 		},
 	}
 	summary := &fakeSummaryReader{countByTenant: map[string]int64{"tenant-a": 3}}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{})
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{})
 
 	t.Run("rejects unauthorized credentials before reading interactions", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/interactions", nil)
@@ -180,7 +182,7 @@ func TestGetSummary(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{countByTenant: map[string]int64{"tenant-a": 4, "tenant-b": 1}}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{})
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{})
 
 	t.Run("returns the tenant's out-of-hours count", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/summary", nil)
@@ -338,7 +340,7 @@ func TestGetEvidence(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, evidence)
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, evidence, &fakeReEvaluator{})
 
 	t.Run("evaluated interaction exports and independently verifies", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/interactions/interaction-evidenced/evidence", nil)
@@ -401,6 +403,143 @@ func TestGetEvidence(t *testing.T) {
 		}
 		if evidence.calls != 0 {
 			t.Fatalf("evidence reader calls = %d, want 0", evidence.calls)
+		}
+	})
+}
+
+// reevalKey scopes fakeReEvaluator lookups by (interactionID, policyBundleID)
+// so cases can distinguish "unknown interaction" from "unknown bundle".
+type reevalKey struct {
+	interactionID  string
+	policyBundleID string
+}
+
+type fakeReEvaluator struct {
+	results map[reevalKey]core.Evaluation
+	err     error
+	calls   int
+}
+
+func (r *fakeReEvaluator) ReEvaluateInteraction(_ context.Context, _, interactionID, policyBundleID string) (core.Evaluation, error) {
+	r.calls++
+	if r.err != nil {
+		return core.Evaluation{}, r.err
+	}
+	got, ok := r.results[reevalKey{interactionID: interactionID, policyBundleID: policyBundleID}]
+	if !ok {
+		return core.Evaluation{}, evaluation.ErrPolicyBundleNotFound
+	}
+	return got, nil
+}
+
+// TestReEvaluateInteraction covers *Reproducible Re-Evaluation Against a
+// Specific Bundle Version* [integration]: a valid historical bundle id
+// returns 200 with the stamped version/id, and an unknown bundle id returns
+// a defined error status while creating no evaluation row (proven here by
+// the fake never persisting — ReEvaluateInteraction is non-persisting by
+// construction).
+func TestReEvaluateInteraction(t *testing.T) {
+	fixedTime := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	store := &fakeKeyStore{
+		records: map[string]auth.TenantAPIKey{
+			auth.HashAPIKey("tenant-a-key"): {ID: "key-a", TenantID: "tenant-a", KeyHash: auth.HashAPIKey("tenant-a-key"), Status: auth.StatusActive},
+		},
+	}
+	bundleID := "bundle-v1"
+	reevaluator := &fakeReEvaluator{
+		results: map[reevalKey]core.Evaluation{
+			{interactionID: "interaction-1", policyBundleID: "bundle-v1"}: {
+				TenantID:            "tenant-a",
+				InteractionEventID:  "interaction-1",
+				OverallOutcome:      "pass",
+				PolicyBundleVersion: "v1",
+				PolicyBundleID:      (*core.ID)(&bundleID),
+			},
+		},
+	}
+	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
+	summary := &fakeSummaryReader{}
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, reevaluator)
+
+	t.Run("valid historical bundle id returns 200 with stamped version/id", func(t *testing.T) {
+		body := strings.NewReader(`{"policy_bundle_id":"bundle-v1"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/interactions/interaction-1/reevaluate", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var got reevaluateResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if got.OverallOutcome != "pass" {
+			t.Fatalf("OverallOutcome = %q, want pass", got.OverallOutcome)
+		}
+		if got.PolicyBundleVersion != "v1" {
+			t.Fatalf("PolicyBundleVersion = %q, want v1", got.PolicyBundleVersion)
+		}
+		if got.PolicyBundleID == nil || *got.PolicyBundleID != "bundle-v1" {
+			t.Fatalf("PolicyBundleID = %v, want pointer to bundle-v1", got.PolicyBundleID)
+		}
+	})
+
+	t.Run("unknown bundle id returns a defined error status and creates no evaluation", func(t *testing.T) {
+		body := strings.NewReader(`{"policy_bundle_id":"unknown-bundle"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/interactions/interaction-1/reevaluate", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+		}
+	})
+
+	t.Run("rejects unauthorized credentials before reevaluating", func(t *testing.T) {
+		reevaluator.calls = 0
+		body := strings.NewReader(`{"policy_bundle_id":"bundle-v1"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/interactions/interaction-1/reevaluate", body)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+		if reevaluator.calls != 0 {
+			t.Fatalf("reevaluator calls = %d, want 0", reevaluator.calls)
+		}
+	})
+
+	t.Run("cross-tenant result never leaks: reevaluated interaction belonging to another tenant returns 404", func(t *testing.T) {
+		crossTenantBundleID := "cross-bundle"
+		crossTenantReevaluator := &fakeReEvaluator{
+			results: map[reevalKey]core.Evaluation{
+				{interactionID: "interaction-cross", policyBundleID: "cross-bundle"}: {
+					TenantID:            "tenant-b",
+					InteractionEventID:  "interaction-cross",
+					OverallOutcome:      "pass",
+					PolicyBundleVersion: "v1",
+					PolicyBundleID:      (*core.ID)(&crossTenantBundleID),
+				},
+			},
+		}
+		crossHandler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, crossTenantReevaluator)
+
+		body := strings.NewReader(`{"policy_bundle_id":"cross-bundle"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/interactions/interaction-cross/reevaluate", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		crossHandler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d (result tenant_id must never leak across the authenticated caller's tenant)", rec.Code, http.StatusNotFound)
 		}
 	})
 }

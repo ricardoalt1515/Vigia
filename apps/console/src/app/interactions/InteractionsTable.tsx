@@ -57,6 +57,29 @@ function isFlagged(interaction: Interaction): boolean {
   return Boolean(interaction.threat_flagged || interaction.requires_hitl);
 }
 
+// PolicyBundleVersionCell distinguishes null (no evaluation row exists yet)
+// from an empty string (an evaluation ran but no PolicyBundle was active at
+// the time) — both render as a dash-like placeholder, but with different
+// text so the state is still visible on hover/inspection, never collapsing
+// the two into one indistinguishable "—" (issue #6).
+function PolicyBundleVersionCell({
+  version,
+}: {
+  version: string | null;
+}) {
+  if (version === null) {
+    return <span className="text-slate-400">—</span>;
+  }
+  if (version === "") {
+    return (
+      <span className="text-slate-400" title="Evaluated with no active policy bundle">
+        (none)
+      </span>
+    );
+  }
+  return <span className="font-mono text-xs text-slate-700">{version}</span>;
+}
+
 export function InteractionsTable({
   interactions,
 }: {
@@ -109,6 +132,9 @@ export function InteractionsTable({
                 <th className="px-4 py-2 text-left font-medium text-slate-700 border-b border-slate-200">
                   Flags
                 </th>
+                <th className="px-4 py-2 text-left font-medium text-slate-700 border-b border-slate-200">
+                  Bundle Version
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -140,6 +166,11 @@ export function InteractionsTable({
                   </td>
                   <td className="px-4 py-2">
                     <FlagsBadges interaction={interaction} />
+                  </td>
+                  <td className="px-4 py-2">
+                    <PolicyBundleVersionCell
+                      version={interaction.policy_bundle_version}
+                    />
                   </td>
                 </tr>
               ))}

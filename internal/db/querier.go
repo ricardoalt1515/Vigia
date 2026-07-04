@@ -12,6 +12,9 @@ import (
 
 type Querier interface {
 	AddPolicyBundleRule(ctx context.Context, arg AddPolicyBundleRuleParams) (PolicyBundleRule, error)
+	// Scoped to (tenant_id, name): CreateBundleVersion numbers new versions per
+	// bundle name, not globally per tenant.
+	CountBundleVersions(ctx context.Context, arg CountBundleVersionsParams) (int64, error)
 	CountOutOfHoursEvaluations(ctx context.Context) (int64, error)
 	CreateDebtor(ctx context.Context, arg CreateDebtorParams) (CreateDebtorRow, error)
 	CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (CreateDetectorResultRowRow, error)
@@ -22,6 +25,12 @@ type Querier interface {
 	CreatePolicyRule(ctx context.Context, arg CreatePolicyRuleParams) (PolicyRule, error)
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
 	CreateTenantAPIKey(ctx context.Context, arg CreateTenantAPIKeyParams) (TenantApiKey, error)
+	// Resolves THE active bundle for a tenant (Design Decision 3/4): today's
+	// BundleResolver seam resolves per-tenant only, with no bundle "name" input.
+	// If a tenant were to ever activate more than one named bundle
+	// simultaneously this returns a SQL "too many rows" error rather than
+	// silently picking one; that constraint is out of scope for issue #6.
+	GetActiveBundleByTenant(ctx context.Context, tenantID pgtype.UUID) (PolicyBundle, error)
 	GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantParams) (GetDebtorByTenantRow, error)
 	// Used by cmd/seed to detect whether a pre-existing (re-run) interaction
 	// still needs to be backfilled with an evaluation.
@@ -32,6 +41,11 @@ type Querier interface {
 	// its tenant.
 	GetInteractionEventByID(ctx context.Context, arg GetInteractionEventByIDParams) (GetInteractionEventByIDRow, error)
 	GetInteractionTranscriptByInteraction(ctx context.Context, arg GetInteractionTranscriptByInteractionParams) (InteractionTranscript, error)
+	// ReEvaluateInteraction's historical-bundle validation (issue #6): scoped to
+	// (id, tenant_id) so a foreign-tenant bundle id naturally resolves to
+	// pgx.ErrNoRows — the same "not found" outcome as a truly unknown id, never
+	// leaking whether the bundle exists for a different tenant.
+	GetPolicyBundleByID(ctx context.Context, arg GetPolicyBundleByIDParams) (PolicyBundle, error)
 	GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error)
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
 	InsertEvidenceRecord(ctx context.Context, arg InsertEvidenceRecordParams) (EvidenceRecord, error)
@@ -52,9 +66,21 @@ type Querier interface {
 	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListInteractionEventsByTenantRow, error)
 	ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListPolicyBundleRulesByTenantRow, error)
 	ListTenantAPIKeysByTenant(ctx context.Context, tenantID pgtype.UUID) ([]TenantApiKey, error)
+	// CreateBundleVersion's serialization point (Design Decision 6): locks the
+	// prior active row scoped to (tenant_id, name) so two concurrent
+	// CreateBundleVersion calls for the same bundle name never both supersede
+	// and insert at once. Returns pgx.ErrNoRows when no prior active bundle
+	// exists yet (the first version for this name) — the caller proceeds
+	// without a row to supersede.
+	LockActivePolicyBundle(ctx context.Context, arg LockActivePolicyBundleParams) (PolicyBundle, error)
 	// Insert-or-lock: first append inserts the genesis head; later appends take the
 	// row lock via the no-op self-update. Either way returns the locked head.
 	LockChainHead(ctx context.Context, arg LockChainHeadParams) (LockChainHeadRow, error)
+	// Status-only update along the allowed active->superseded transition (the
+	// one carve-out policy_bundles_guard_mutation permits). MUST run before the
+	// new active row is inserted: the partial unique index
+	// policy_bundles_one_active_per_tenant_name is non-deferrable.
+	SupersedePolicyBundle(ctx context.Context, arg SupersedePolicyBundleParams) error
 	UpdateChainHead(ctx context.Context, arg UpdateChainHeadParams) error
 }
 

@@ -102,7 +102,11 @@ type Evaluation struct {
 	InteractionEventID  ID
 	OverallOutcome      string
 	PolicyBundleVersion string
-	CreatedAt           time.Time
+	// PolicyBundleID is the composite FK to the resolved active bundle
+	// (issue #6). Nil when no bundle was active at evaluation time
+	// (Design Decision 3's sentinel path) or for pre-#6 rows.
+	PolicyBundleID *ID
+	CreatedAt      time.Time
 }
 
 type PolicyRule struct {
@@ -128,6 +132,10 @@ type PolicyBundleRule struct {
 	PolicyBundleID ID
 	PolicyRuleID   ID
 	CreatedAt      time.Time
+	// EffectiveDate and LegalBasis are issue #6 additions: every rule
+	// snapshot records when it applied and its legal grounding.
+	EffectiveDate time.Time
+	LegalBasis    string
 }
 
 type DetectorResultRow struct {

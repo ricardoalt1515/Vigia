@@ -170,6 +170,7 @@ SELECT
     e.overall_outcome,
     e.requires_hitl,
     CASE WHEN e.id IS NULL THEN NULL ELSE agg.threat_flagged END AS threat_flagged,
+    CASE WHEN e.id IS NULL THEN NULL ELSE e.policy_bundle_version END AS policy_bundle_version,
     agg.reason
 FROM interaction_events ie
 LEFT JOIN evaluations e ON e.interaction_event_id = ie.id
@@ -193,20 +194,21 @@ LIMIT $1
 `
 
 type ListCurrentTenantInteractionsWithOutcomeRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	TenantID       pgtype.UUID        `json:"tenant_id"`
-	DebtorID       pgtype.UUID        `json:"debtor_id"`
-	Channel        string             `json:"channel"`
-	Direction      string             `json:"direction"`
-	Status         string             `json:"status"`
-	OccurredAt     pgtype.Timestamptz `json:"occurred_at"`
-	TranscriptRef  *string            `json:"transcript_ref"`
-	DebtorTimezone string             `json:"debtor_timezone"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	OverallOutcome *string            `json:"overall_outcome"`
-	RequiresHitl   *bool              `json:"requires_hitl"`
-	ThreatFlagged  interface{}        `json:"threat_flagged"`
-	Reason         interface{}        `json:"reason"`
+	ID                  pgtype.UUID        `json:"id"`
+	TenantID            pgtype.UUID        `json:"tenant_id"`
+	DebtorID            pgtype.UUID        `json:"debtor_id"`
+	Channel             string             `json:"channel"`
+	Direction           string             `json:"direction"`
+	Status              string             `json:"status"`
+	OccurredAt          pgtype.Timestamptz `json:"occurred_at"`
+	TranscriptRef       *string            `json:"transcript_ref"`
+	DebtorTimezone      string             `json:"debtor_timezone"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	OverallOutcome      *string            `json:"overall_outcome"`
+	RequiresHitl        *bool              `json:"requires_hitl"`
+	ThreatFlagged       interface{}        `json:"threat_flagged"`
+	PolicyBundleVersion interface{}        `json:"policy_bundle_version"`
+	Reason              interface{}        `json:"reason"`
 }
 
 // Issue #4 rewrite: aggregates across detector_result_rows per evaluation
@@ -238,6 +240,7 @@ func (q *Queries) ListCurrentTenantInteractionsWithOutcome(ctx context.Context, 
 			&i.OverallOutcome,
 			&i.RequiresHitl,
 			&i.ThreatFlagged,
+			&i.PolicyBundleVersion,
 			&i.Reason,
 		); err != nil {
 			return nil, err

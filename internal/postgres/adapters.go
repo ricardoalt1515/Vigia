@@ -15,8 +15,10 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/auth"
 	"github.com/ricardoalt1515/vigia/internal/core"
 	vigiaDB "github.com/ricardoalt1515/vigia/internal/db"
+	"github.com/ricardoalt1515/vigia/internal/detection"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/httpapi"
+	"github.com/ricardoalt1515/vigia/internal/judge"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
 	"github.com/ricardoalt1515/vigia/internal/tenantdb"
 )
@@ -96,14 +98,15 @@ func (r *InteractionReader) ListInteractions(ctx context.Context, tenantID strin
 		items = make([]httpapi.Interaction, 0, len(rows))
 		for _, row := range rows {
 			items = append(items, httpapi.Interaction{
-				ID:            uuidString(row.ID),
-				OccurredAt:    row.OccurredAt.Time,
-				Channel:       row.Channel,
-				Direction:     row.Direction,
-				Outcome:       outcomeToAPI(row.OverallOutcome),
-				Reason:        reasonToAPI(row.Reason),
-				RequiresHITL:  row.RequiresHitl,
-				ThreatFlagged: threatFlaggedToAPI(row.ThreatFlagged),
+				ID:                  uuidString(row.ID),
+				OccurredAt:          row.OccurredAt.Time,
+				Channel:             row.Channel,
+				Direction:           row.Direction,
+				Outcome:             outcomeToAPI(row.OverallOutcome),
+				Reason:              reasonToAPI(row.Reason),
+				RequiresHITL:        row.RequiresHitl,
+				ThreatFlagged:       threatFlaggedToAPI(row.ThreatFlagged),
+				PolicyBundleVersion: policyBundleVersionToAPI(row.PolicyBundleVersion),
 			})
 		}
 		return nil
@@ -141,6 +144,26 @@ func reasonToAPI(reason any) *string {
 		return nil
 	}
 	switch v := reason.(type) {
+	case string:
+		return &v
+	case *string:
+		return v
+	default:
+		return nil
+	}
+}
+
+// policyBundleVersionToAPI narrows the sqlc-generated `interface{}` for the
+// CASE-guarded policy_bundle_version column (see
+// db/queries/interaction_events.sql) to *string: nil when the interaction
+// has no evaluation row at all, the stored (possibly empty-string sentinel)
+// value otherwise — the empty string is a real, distinct value, never
+// coerced to nil (issue #6, mirrors threatFlaggedToAPI's convention).
+func policyBundleVersionToAPI(policyBundleVersion any) *string {
+	if policyBundleVersion == nil {
+		return nil
+	}
+	switch v := policyBundleVersion.(type) {
 	case string:
 		return &v
 	case *string:
@@ -229,13 +252,23 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 	err = tenantdb.WithTenantTx(ctx, s.db, in.TenantID, func(ctx context.Context, tx tenantdb.Tx) error {
 		q := vigiaDB.New(tx)
 
+		var policyBundleID pgtype.UUID
+		if in.PolicyBundleID != nil {
+			policyBundleID, err = parseUUID(*in.PolicyBundleID)
+			if err != nil {
+				return err
+			}
+		}
+
 		header, err := q.CreateEvaluation(ctx, vigiaDB.CreateEvaluationParams{
-			TenantID:           tenantUUID,
-			InteractionEventID: interactionUUID,
-			OverallOutcome:     in.OverallOutcome,
-			RequiresHitl:       in.RequiresHITL,
-			JudgeModelID:       in.JudgeModelID,
-			RubricVersion:      in.RubricVersion,
+			TenantID:            tenantUUID,
+			InteractionEventID:  interactionUUID,
+			OverallOutcome:      in.OverallOutcome,
+			RequiresHitl:        in.RequiresHITL,
+			JudgeModelID:        in.JudgeModelID,
+			RubricVersion:       in.RubricVersion,
+			PolicyBundleVersion: in.PolicyBundleVersion,
+			PolicyBundleID:      policyBundleID,
 		})
 		if err != nil {
 			return err
@@ -361,12 +394,18 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 			return err
 		}
 
+		var resultPolicyBundleID *core.ID
+		if header.PolicyBundleID.Valid {
+			id := core.ID(uuidString(header.PolicyBundleID))
+			resultPolicyBundleID = &id
+		}
 		result = core.Evaluation{
 			ID:                  core.ID(uuidString(header.ID)),
 			TenantID:            core.ID(uuidString(header.TenantID)),
 			InteractionEventID:  core.ID(uuidString(header.InteractionEventID)),
 			OverallOutcome:      header.OverallOutcome,
 			PolicyBundleVersion: header.PolicyBundleVersion,
+			PolicyBundleID:      resultPolicyBundleID,
 			CreatedAt:           header.CreatedAt.Time,
 		}
 		return nil
@@ -601,4 +640,310 @@ func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {
 		PrevHash: row.PrevHash,
 		Hash:     row.Hash,
 	}
+}
+
+// BundleResolverAdapter resolves a tenant's active PolicyBundle via
+// GetActiveBundleByTenant (issue #6), implementing evaluation.BundleResolver.
+// It runs inside a tenant-scoped transaction so RLS enforces tenant
+// isolation: tenant A can never resolve tenant B's bundle even if it calls
+// with tenant B's id (RLS scopes the row set before the query predicate).
+type BundleResolverAdapter struct {
+	db tenantdb.Beginner
+}
+
+func NewBundleResolverAdapter(db tenantdb.Beginner) *BundleResolverAdapter {
+	return &BundleResolverAdapter{db: db}
+}
+
+func NewBundleResolverAdapterFromPool(pool *pgxpool.Pool) *BundleResolverAdapter {
+	return NewBundleResolverAdapter(poolBeginner{pool: pool})
+}
+
+// ActiveBundle returns found=false (never an error) when no active bundle
+// exists for the tenant — a missing bundle is an expected, non-exceptional
+// state (Design Decision 3), not a resolver failure.
+func (r *BundleResolverAdapter) ActiveBundle(ctx context.Context, tenantID string) (version, id string, found bool, err error) {
+	tenantUUID, err := parseUUID(tenantID)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	err = tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		bundle, err := vigiaDB.New(tx).GetActiveBundleByTenant(ctx, tenantUUID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		version = bundle.Version
+		id = uuidString(bundle.ID)
+		found = true
+		return nil
+	})
+	if err != nil {
+		return "", "", false, err
+	}
+	return version, id, found, nil
+}
+
+var _ evaluation.BundleResolver = (*BundleResolverAdapter)(nil)
+
+// InteractionLookupAdapter resolves a stored interaction (and its
+// transcript, if any) by id for evaluation.Service.ReEvaluateInteraction,
+// implementing evaluation.InteractionLookup. The lookup is tenant-scoped
+// via tenantdb.WithTenantTx (RLS-restricted vigia_app role) using the
+// caller-supplied tenantID — a foreign-tenant or unknown interactionID
+// resolves to found=false BEFORE any bundle lookup or detector/judge
+// execution ever runs (judgment-day fix: the tenant check must precede
+// re-evaluation work, not follow it).
+type InteractionLookupAdapter struct {
+	db tenantdb.Beginner
+}
+
+func NewInteractionLookupAdapter(db tenantdb.Beginner) *InteractionLookupAdapter {
+	return &InteractionLookupAdapter{db: db}
+}
+
+func NewInteractionLookupAdapterFromPool(pool *pgxpool.Pool) *InteractionLookupAdapter {
+	return NewInteractionLookupAdapter(poolBeginner{pool: pool})
+}
+
+func (a *InteractionLookupAdapter) GetInteractionForReEvaluation(ctx context.Context, tenantID, interactionID string) (evaluation.ReEvaluationInput, bool, error) {
+	interactionUUID, err := parseUUID(interactionID)
+	if err != nil {
+		return evaluation.ReEvaluationInput{}, false, err
+	}
+	tenantUUID, err := parseUUID(tenantID)
+	if err != nil {
+		return evaluation.ReEvaluationInput{}, false, err
+	}
+
+	var result evaluation.ReEvaluationInput
+	found := false
+	err = tenantdb.WithTenantTx(ctx, a.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		q := vigiaDB.New(tx)
+
+		row, err := q.GetInteractionEventByID(ctx, vigiaDB.GetInteractionEventByIDParams{
+			ID:       interactionUUID,
+			TenantID: tenantUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+
+		var utterances []judge.Utterance
+		transcript, err := q.GetInteractionTranscriptByInteraction(ctx, vigiaDB.GetInteractionTranscriptByInteractionParams{
+			TenantID:           row.TenantID,
+			InteractionEventID: row.ID,
+		})
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		} else {
+			var stored []seedUtteranceShape
+			if err := json.Unmarshal(transcript.Utterances, &stored); err != nil {
+				return err
+			}
+			utterances = make([]judge.Utterance, 0, len(stored))
+			for _, u := range stored {
+				utterances = append(utterances, judge.Utterance{Speaker: u.Speaker, Text: u.Text})
+			}
+		}
+
+		result = evaluation.ReEvaluationInput{
+			TenantID: uuidString(row.TenantID),
+			Interaction: detection.Interaction{
+				OccurredAt:     row.OccurredAt.Time,
+				DebtorTimezone: row.DebtorTimezone,
+			},
+			Utterances: utterances,
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return evaluation.ReEvaluationInput{}, false, err
+	}
+	return result, found, nil
+}
+
+var _ evaluation.InteractionLookup = (*InteractionLookupAdapter)(nil)
+
+// seedUtteranceShape mirrors cmd/seed's private seedUtterance JSON shape:
+// the stored interaction_transcripts.utterances payload is
+// [{ "speaker": "...", "text": "..." }, ...] in transcript order.
+type seedUtteranceShape struct {
+	Speaker string `json:"speaker"`
+	Text    string `json:"text"`
+}
+
+// BundleVersionResolverAdapter resolves a specific historical bundle's
+// version by id, scoped to a tenant, implementing
+// evaluation.BundleVersionLookup.
+type BundleVersionResolverAdapter struct {
+	db tenantdb.Beginner
+}
+
+func NewBundleVersionResolverAdapter(db tenantdb.Beginner) *BundleVersionResolverAdapter {
+	return &BundleVersionResolverAdapter{db: db}
+}
+
+func NewBundleVersionResolverAdapterFromPool(pool *pgxpool.Pool) *BundleVersionResolverAdapter {
+	return NewBundleVersionResolverAdapter(poolBeginner{pool: pool})
+}
+
+func (a *BundleVersionResolverAdapter) BundleVersionByID(ctx context.Context, tenantID, policyBundleID string) (version string, found bool, err error) {
+	tenantUUID, err := parseUUID(tenantID)
+	if err != nil {
+		return "", false, err
+	}
+	bundleUUID, err := parseUUID(policyBundleID)
+	if err != nil {
+		return "", false, nil
+	}
+
+	err = tenantdb.WithTenantTx(ctx, a.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		bundle, err := vigiaDB.New(tx).GetPolicyBundleByID(ctx, vigiaDB.GetPolicyBundleByIDParams{
+			ID:       bundleUUID,
+			TenantID: tenantUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		version = bundle.Version
+		found = true
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return version, found, nil
+}
+
+var _ evaluation.BundleVersionLookup = (*BundleVersionResolverAdapter)(nil)
+
+// BundleRuleInput is one rule snapshot to attach to a new bundle version via
+// CreateBundleVersion: PolicyRuleID identifies the (already-existing)
+// policy_rules row, EffectiveDate/LegalBasis are the issue #6 provenance
+// columns recorded on the policy_bundle_rules snapshot row.
+type BundleRuleInput struct {
+	PolicyRuleID  string
+	EffectiveDate time.Time
+	LegalBasis    string
+}
+
+// PolicyBundleStore creates new, immutable PolicyBundle versions
+// (CreateBundleVersion). Like cmd/seed and EvaluationStore's ledger writes,
+// it runs through the owner/migration role: vigia_app only has SELECT on
+// policy_bundles/policy_bundle_rules (00007_policy_bundle_versioning.sql).
+type PolicyBundleStore struct {
+	db tenantdb.Beginner
+}
+
+func NewPolicyBundleStore(db tenantdb.Beginner) *PolicyBundleStore {
+	return &PolicyBundleStore{db: db}
+}
+
+func NewPolicyBundleStoreFromPool(pool *pgxpool.Pool) *PolicyBundleStore {
+	return NewPolicyBundleStore(poolBeginner{pool: pool})
+}
+
+// CreateBundleVersion implements Design Decision 6: inside one tenant-scoped
+// transaction, it locks the prior active bundle row for (tenantID, name) via
+// LockActivePolicyBundle's SELECT ... FOR UPDATE (serializing concurrent
+// callers and version numbering), supersedes it FIRST if one exists, THEN
+// inserts the new active bundle (version vN, N = prior CountBundleVersions +
+// 1) and its rule-snapshot rows. Supersede-before-insert is mandatory: the
+// partial unique index policy_bundles_one_active_per_tenant_name is
+// non-deferrable, so inserting the new active row while the prior one is
+// still active would violate it on every ordinary edit.
+func (s *PolicyBundleStore) CreateBundleVersion(ctx context.Context, tenantID, name string, rules []BundleRuleInput) (core.PolicyBundle, error) {
+	tenantUUID, err := parseUUID(tenantID)
+	if err != nil {
+		return core.PolicyBundle{}, err
+	}
+
+	var result core.PolicyBundle
+	err = tenantdb.WithTenantTx(ctx, s.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		q := vigiaDB.New(tx)
+
+		prior, err := q.LockActivePolicyBundle(ctx, vigiaDB.LockActivePolicyBundleParams{
+			TenantID: tenantUUID,
+			Name:     name,
+		})
+		hasPrior := true
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				hasPrior = false
+			} else {
+				return err
+			}
+		}
+
+		count, err := q.CountBundleVersions(ctx, vigiaDB.CountBundleVersionsParams{
+			TenantID: tenantUUID,
+			Name:     name,
+		})
+		if err != nil {
+			return err
+		}
+
+		if hasPrior {
+			if err := q.SupersedePolicyBundle(ctx, vigiaDB.SupersedePolicyBundleParams{
+				ID:       prior.ID,
+				TenantID: tenantUUID,
+			}); err != nil {
+				return err
+			}
+		}
+
+		newVersion := fmt.Sprintf("v%d", count+1)
+		bundle, err := q.CreatePolicyBundle(ctx, vigiaDB.CreatePolicyBundleParams{
+			TenantID: tenantUUID,
+			Name:     name,
+			Version:  newVersion,
+			Status:   "active",
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, rule := range rules {
+			ruleUUID, err := parseUUID(rule.PolicyRuleID)
+			if err != nil {
+				return err
+			}
+			if _, err := q.AddPolicyBundleRule(ctx, vigiaDB.AddPolicyBundleRuleParams{
+				TenantID:       tenantUUID,
+				PolicyBundleID: bundle.ID,
+				PolicyRuleID:   ruleUUID,
+				EffectiveDate:  pgtype.Date{Time: rule.EffectiveDate, Valid: true},
+				LegalBasis:     rule.LegalBasis,
+			}); err != nil {
+				return err
+			}
+		}
+
+		result = core.PolicyBundle{
+			ID:        core.ID(uuidString(bundle.ID)),
+			TenantID:  core.ID(uuidString(bundle.TenantID)),
+			Name:      bundle.Name,
+			Version:   bundle.Version,
+			Status:    bundle.Status,
+			CreatedAt: bundle.CreatedAt.Time,
+		}
+		return nil
+	})
+	if err != nil {
+		return core.PolicyBundle{}, err
+	}
+	return result, nil
 }

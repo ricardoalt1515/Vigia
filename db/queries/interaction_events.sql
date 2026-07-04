@@ -35,6 +35,7 @@ SELECT
     e.overall_outcome,
     e.requires_hitl,
     CASE WHEN e.id IS NULL THEN NULL ELSE agg.threat_flagged END AS threat_flagged,
+    CASE WHEN e.id IS NULL THEN NULL ELSE e.policy_bundle_version END AS policy_bundle_version,
     agg.reason
 FROM interaction_events ie
 LEFT JOIN evaluations e ON e.interaction_event_id = ie.id

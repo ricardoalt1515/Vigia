@@ -93,6 +93,7 @@ type Evaluation struct {
 	RequiresHitl        bool               `json:"requires_hitl"`
 	JudgeModelID        string             `json:"judge_model_id"`
 	RubricVersion       string             `json:"rubric_version"`
+	PolicyBundleID      pgtype.UUID        `json:"policy_bundle_id"`
 }
 
 type EvidenceRecord struct {
@@ -153,6 +154,8 @@ type PolicyBundleRule struct {
 	PolicyBundleID pgtype.UUID        `json:"policy_bundle_id"`
 	PolicyRuleID   pgtype.UUID        `json:"policy_rule_id"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	EffectiveDate  pgtype.Date        `json:"effective_date"`
+	LegalBasis     string             `json:"legal_basis"`
 }
 
 type PolicyRule struct {

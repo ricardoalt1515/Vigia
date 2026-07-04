@@ -329,6 +329,8 @@ func TestRestrictedAppRoleIsLeastPrivilege(t *testing.T) {
 		"evidence_records",
 		"ledger_chain_heads",
 		"interaction_transcripts",
+		"policy_bundles",
+		"policy_bundle_rules",
 	} {
 		t.Run(table, func(t *testing.T) {
 			var canSelect bool
@@ -345,6 +347,86 @@ func TestRestrictedAppRoleIsLeastPrivilege(t *testing.T) {
 			}
 			if canInsert {
 				t.Fatalf("vigia_app can INSERT into %s; current RLS tests only require SELECT", table)
+			}
+		})
+	}
+}
+
+// TestMigration00007PolicyBundleVersioningCatalog covers issue #6's schema
+// half: the CHECK constraint, the partial unique index, and all four
+// append-only guard triggers (row-level UPDATE/DELETE + statement-level
+// TRUNCATE per table) must exist and be ENABLE ALWAYS after migration 00007.
+func TestMigration00007PolicyBundleVersioningCatalog(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping PostgreSQL catalog check in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL is required for PostgreSQL catalog check")
+	}
+
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	t.Run("policy_bundles_status_check exists", func(t *testing.T) {
+		var exists bool
+		if err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_constraint
+				WHERE conname = 'policy_bundles_status_check'
+				  AND conrelid = 'policy_bundles'::regclass
+			)
+		`).Scan(&exists); err != nil {
+			t.Fatalf("query constraint: %v", err)
+		}
+		if !exists {
+			t.Fatal("policy_bundles_status_check constraint does not exist")
+		}
+	})
+
+	t.Run("policy_bundles_one_active_per_tenant_name partial unique index exists", func(t *testing.T) {
+		var exists bool
+		if err := db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_indexes
+				WHERE indexname = 'policy_bundles_one_active_per_tenant_name'
+				  AND tablename = 'policy_bundles'
+			)
+		`).Scan(&exists); err != nil {
+			t.Fatalf("query index: %v", err)
+		}
+		if !exists {
+			t.Fatal("policy_bundles_one_active_per_tenant_name index does not exist")
+		}
+	})
+
+	guardTriggers := []struct {
+		table   string
+		trigger string
+	}{
+		{table: "policy_bundles", trigger: "policy_bundles_guard_update_delete"},
+		{table: "policy_bundles", trigger: "policy_bundles_guard_truncate"},
+		{table: "policy_bundle_rules", trigger: "policy_bundle_rules_no_update_delete"},
+		{table: "policy_bundle_rules", trigger: "policy_bundle_rules_no_truncate"},
+	}
+	for _, tt := range guardTriggers {
+		t.Run(tt.trigger+" is ENABLE ALWAYS", func(t *testing.T) {
+			var enabled string
+			if err := db.QueryRowContext(ctx, `
+				SELECT tgenabled FROM pg_trigger
+				WHERE tgname = $1 AND tgrelid = $2::regclass
+			`, tt.trigger, tt.table).Scan(&enabled); err != nil {
+				t.Fatalf("query trigger %s on %s: %v", tt.trigger, tt.table, err)
+			}
+			// pg_trigger.tgenabled = 'A' means ENABLE ALWAYS.
+			if enabled != "A" {
+				t.Fatalf("trigger %s tgenabled = %q, want %q (ENABLE ALWAYS)", tt.trigger, enabled, "A")
 			}
 		})
 	}
