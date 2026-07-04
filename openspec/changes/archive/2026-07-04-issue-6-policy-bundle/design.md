@@ -66,7 +66,7 @@ BEGIN
     RAISE EXCEPTION 'policy_bundles is append-only: % not permitted', TG_OP USING ERRCODE='restrict_violation';
   END IF;
   IF ROW(NEW.id,NEW.tenant_id,NEW.name,NEW.version,NEW.created_at)
-     IS DISTINCT FROM ROW(OLD.id,OLD.tenant_id,OLD.name,OLD.version,OLD.created_at) THEN
+     IS DISTINCT FROM ROW(OLD.id,OLD.tenant_id,NEW.name,OLD.version,OLD.created_at) THEN
     RAISE EXCEPTION 'policy_bundles: only status may change' USING ERRCODE='restrict_violation';
   END IF;
   IF NOT (OLD.status=NEW.status
