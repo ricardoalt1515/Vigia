@@ -67,7 +67,7 @@ type EvidenceReader interface {
 // caller before responding, so a result belonging to another tenant can
 // never leak.
 type ReEvaluator interface {
-	ReEvaluateInteraction(ctx context.Context, interactionID, policyBundleID string) (core.Evaluation, error)
+	ReEvaluateInteraction(ctx context.Context, tenantID, interactionID, policyBundleID string) (core.Evaluation, error)
 }
 
 type Server struct {
@@ -215,7 +215,7 @@ func (s *Server) handleReEvaluate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	got, err := s.reevaluator.ReEvaluateInteraction(r.Context(), id, req.PolicyBundleID)
+	got, err := s.reevaluator.ReEvaluateInteraction(r.Context(), tenant.TenantID, id, req.PolicyBundleID)
 	if err != nil {
 		if errors.Is(err, evaluation.ErrInteractionNotFound) || errors.Is(err, evaluation.ErrPolicyBundleNotFound) {
 			writeError(w, http.StatusNotFound)
@@ -225,11 +225,12 @@ func (s *Server) handleReEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The interaction's owning tenant is resolved internally by the
-	// ReEvaluator — independently verify it matches the authenticated
-	// caller before responding, so a result belonging to another tenant can
-	// never leak (mirrors handleGetEvidence's tenant-scoped lookup, applied
-	// here as a defense-in-depth check on the returned result).
+	// The tenant scoping already happened before any bundle/detector/judge
+	// work ran, inside ReEvaluateInteraction's tenant-scoped interaction
+	// lookup (a foreign-tenant interactionID resolves to
+	// ErrInteractionNotFound, handled above). This is a defense-in-depth
+	// check on the returned result only, mirroring handleGetEvidence's
+	// tenant-scoped lookup precedent — it should never trigger in practice.
 	if string(got.TenantID) != tenant.TenantID {
 		writeError(w, http.StatusNotFound)
 		return

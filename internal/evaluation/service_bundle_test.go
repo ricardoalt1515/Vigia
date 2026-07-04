@@ -3,12 +3,27 @@ package evaluation_test
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/ricardoalt1515/vigia/internal/detection"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 )
+
+// recordingLogHandler captures every slog.Record it receives, so tests can
+// assert on log level/message without depending on stdout/stderr formatting.
+type recordingLogHandler struct {
+	records *[]slog.Record
+}
+
+func (h recordingLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h recordingLogHandler) Handle(_ context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r)
+	return nil
+}
+func (h recordingLogHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h recordingLogHandler) WithGroup(_ string) slog.Handler      { return h }
 
 // fakeBundleResolver is a table-driven test double for
 // evaluation.BundleResolver: it returns a canned (version, id, found, err)
@@ -129,6 +144,41 @@ func TestServiceStampsResolvedBundleVersion(t *testing.T) {
 		}
 		if call.PolicyBundleID != nil {
 			t.Fatalf("PolicyBundleID = %v, want nil on resolver error", call.PolicyBundleID)
+		}
+	})
+
+	t.Run("resolver error is logged distinctly from the not-found case", func(t *testing.T) {
+		var records []slog.Record
+		logger := slog.New(recordingLogHandler{records: &records})
+
+		errSvc := newPassingService(&fakeEvaluationStore{}, fakeBundleResolver{err: errors.New("resolver transport error")})
+		errSvc.Logger = logger
+		if _, err := errSvc.EvaluateInteraction(context.Background(), evaluation.EvaluateInteractionInput{
+			TenantID:           "tenant-a",
+			InteractionEventID: "interaction-bundle-5",
+			Interaction:        interaction,
+		}); err != nil {
+			t.Fatalf("EvaluateInteraction must not hard-fail on a resolver error: %v", err)
+		}
+		if len(records) != 1 {
+			t.Fatalf("resolver error: got %d log records, want 1", len(records))
+		}
+		if records[0].Level != slog.LevelError {
+			t.Fatalf("resolver error: log level = %v, want %v", records[0].Level, slog.LevelError)
+		}
+
+		records = nil
+		notFoundSvc := newPassingService(&fakeEvaluationStore{}, fakeBundleResolver{found: false})
+		notFoundSvc.Logger = logger
+		if _, err := notFoundSvc.EvaluateInteraction(context.Background(), evaluation.EvaluateInteractionInput{
+			TenantID:           "tenant-a",
+			InteractionEventID: "interaction-bundle-6",
+			Interaction:        interaction,
+		}); err != nil {
+			t.Fatalf("EvaluateInteraction must not hard-fail on a not-found resolver: %v", err)
+		}
+		if len(records) != 0 {
+			t.Fatalf("not-found resolver: got %d log records, want 0 (expected, not an error)", len(records))
 		}
 	})
 }

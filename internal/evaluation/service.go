@@ -7,6 +7,7 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/ricardoalt1515/vigia/internal/core"
 	"github.com/ricardoalt1515/vigia/internal/detection"
@@ -139,6 +140,22 @@ type Service struct {
 	// never touches them.
 	Interactions InteractionLookup
 	Bundles      BundleVersionLookup
+
+	// Logger records resolveActiveBundle's error path (a real resolver/DB
+	// error, as opposed to the expected "no active bundle configured" case)
+	// distinctly, so an operator can tell the two apart in production even
+	// though both fail open to the same ""/nil sentinel (Design Decision
+	// 3). Nil is safe: slog.Default() is used instead, so existing callers
+	// that never set Logger are unaffected.
+	Logger *slog.Logger
+}
+
+// logger returns s.Logger, falling back to slog.Default() when unset.
+func (s Service) logger() *slog.Logger {
+	if s.Logger != nil {
+		return s.Logger
+	}
+	return slog.Default()
 }
 
 // judgeFailureRationale renders a fail-closed rationale that names the
@@ -327,10 +344,15 @@ type ReEvaluationInput struct {
 	Utterances  []judge.Utterance
 }
 
-// InteractionLookup resolves a previously-recorded interaction by id for
-// ReEvaluateInteraction. found=false means no such interaction exists.
+// InteractionLookup resolves a previously-recorded interaction by id,
+// scoped to the authenticated tenant, for ReEvaluateInteraction.
+// found=false means no such interaction exists for that tenant — this
+// covers both "no such interaction" and "interaction belongs to a
+// different tenant" so a foreign-tenant interaction id is
+// indistinguishable from an unknown one (mirrors ErrPolicyBundleNotFound's
+// same collapsing behavior).
 type InteractionLookup interface {
-	GetInteractionForReEvaluation(ctx context.Context, interactionID string) (ReEvaluationInput, bool, error)
+	GetInteractionForReEvaluation(ctx context.Context, tenantID, interactionID string) (ReEvaluationInput, bool, error)
 }
 
 // BundleVersionLookup resolves a specific historical PolicyBundle's version
@@ -349,7 +371,15 @@ type BundleVersionLookup interface {
 // reproducible (Design Decision 5). It does not select detectors/rubric
 // based on bundle rule content: the same wired pipeline always runs,
 // independent of which historical bundle is requested.
-func (s Service) ReEvaluateInteraction(ctx context.Context, interactionID, policyBundleID string) (core.Evaluation, error) {
+//
+// tenantID is the authenticated caller's tenant. It is checked FIRST, via
+// the tenant-scoped s.Interactions lookup, before any bundle lookup or
+// detector/judge execution runs — a foreign-tenant or unknown
+// interactionID resolves to ErrInteractionNotFound without ever invoking a
+// detector or the judge (judgment-day finding: sending another tenant's
+// transcript to an external LLM judge before the tenant check is a data
+// leak, not just an authorization gap).
+func (s Service) ReEvaluateInteraction(ctx context.Context, tenantID, interactionID, policyBundleID string) (core.Evaluation, error) {
 	if len(s.Detectors) == 0 {
 		return core.Evaluation{}, ErrNoDetectors
 	}
@@ -357,7 +387,7 @@ func (s Service) ReEvaluateInteraction(ctx context.Context, interactionID, polic
 		return core.Evaluation{}, ErrMultipleJudgesNotSupported
 	}
 
-	reInput, found, err := s.Interactions.GetInteractionForReEvaluation(ctx, interactionID)
+	reInput, found, err := s.Interactions.GetInteractionForReEvaluation(ctx, tenantID, interactionID)
 	if err != nil {
 		return core.Evaluation{}, err
 	}
@@ -365,7 +395,7 @@ func (s Service) ReEvaluateInteraction(ctx context.Context, interactionID, polic
 		return core.Evaluation{}, ErrInteractionNotFound
 	}
 
-	version, found, err := s.Bundles.BundleVersionByID(ctx, reInput.TenantID, policyBundleID)
+	version, found, err := s.Bundles.BundleVersionByID(ctx, tenantID, policyBundleID)
 	if err != nil {
 		return core.Evaluation{}, err
 	}
@@ -388,13 +418,24 @@ func (s Service) ReEvaluateInteraction(ctx context.Context, interactionID, polic
 // resolveActiveBundle stamps the tenant's active bundle version + id via
 // s.Resolver, degrading to the existing ""/nil sentinel on a nil resolver,
 // not-found, or resolver error (Design Decision 3: a missing or erroring
-// bundle resolution must never hard-fail EvaluateInteraction).
+// bundle resolution must never hard-fail EvaluateInteraction). A resolver
+// error is logged distinctly from the expected not-found case (judgment-day
+// finding: silently folding a real DB/resolver failure into "no active
+// bundle" hides operational problems), but never changes the returned
+// sentinel — ledger golden hashes must stay byte-identical either way.
 func (s Service) resolveActiveBundle(ctx context.Context, tenantID string) (version string, id *string) {
 	if s.Resolver == nil {
 		return "", nil
 	}
 	v, bundleID, found, err := s.Resolver.ActiveBundle(ctx, tenantID)
-	if err != nil || !found {
+	if err != nil {
+		s.logger().Error("evaluation.resolve_active_bundle_failed",
+			"tenant_id", tenantID,
+			"err", err.Error(),
+		)
+		return "", nil
+	}
+	if !found {
 		return "", nil
 	}
 	return v, &bundleID

@@ -5,18 +5,6 @@ SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transc
 FROM interaction_events
 WHERE id = $1 AND tenant_id = $2;
 
--- name: GetInteractionEventByIDAnyTenant :one
--- ReEvaluateInteraction lookup (issue #6): the caller supplies only an
--- interactionID, not its tenant, so this intentionally has no tenant_id
--- filter. MUST only ever be called through the owner/migration connection
--- (never the RLS-restricted vigia_app role) — the returned tenant_id is
--- then used to scope every subsequent query, and the httpapi handler
--- independently re-verifies it against the authenticated caller before
--- responding.
-SELECT id, tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, created_at
-FROM interaction_events
-WHERE id = $1;
-
 -- name: CreateInteractionEvent :one
 INSERT INTO interaction_events (tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

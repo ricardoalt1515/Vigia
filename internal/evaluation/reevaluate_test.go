@@ -12,17 +12,21 @@ import (
 
 // fakeInteractionLookup is a table-driven test double for
 // evaluation.InteractionLookup: returns a canned ReEvaluationInput for a
-// known interactionID, found=false otherwise.
+// known (tenantID, interactionID) pair, found=false otherwise (covers both
+// unknown and foreign-tenant interaction ids, mirroring the real
+// tenant-scoped SQL lookup).
 type fakeInteractionLookup struct {
-	byInteractionID map[string]evaluation.ReEvaluationInput
+	byInteractionID map[string]evaluation.ReEvaluationInput // key: tenantID+"|"+interactionID
 	err             error
+	calls           int
 }
 
-func (f fakeInteractionLookup) GetInteractionForReEvaluation(_ context.Context, interactionID string) (evaluation.ReEvaluationInput, bool, error) {
+func (f *fakeInteractionLookup) GetInteractionForReEvaluation(_ context.Context, tenantID, interactionID string) (evaluation.ReEvaluationInput, bool, error) {
+	f.calls++
 	if f.err != nil {
 		return evaluation.ReEvaluationInput{}, false, f.err
 	}
-	in, found := f.byInteractionID[interactionID]
+	in, found := f.byInteractionID[tenantID+"|"+interactionID]
 	return in, found, nil
 }
 
@@ -44,9 +48,13 @@ func (f fakeBundleVersionLookup) BundleVersionByID(_ context.Context, tenantID, 
 }
 
 func reEvaluationService(store evaluation.EvaluationStore, interactions evaluation.InteractionLookup, bundles evaluation.BundleVersionLookup) evaluation.Service {
+	return reEvaluationServiceWithDetector(store, interactions, bundles, fakeDetector{result: detection.Result{Outcome: detection.OutcomePass, Rationale: "inside window"}})
+}
+
+func reEvaluationServiceWithDetector(store evaluation.EvaluationStore, interactions evaluation.InteractionLookup, bundles evaluation.BundleVersionLookup, detector fakeDetector) evaluation.Service {
 	return evaluation.Service{
 		Detectors: []evaluation.NamedDetector{
-			{Code: "contact-hours", Detector: fakeDetector{result: detection.Result{Outcome: detection.OutcomePass, Rationale: "inside window"}}},
+			{Code: "contact-hours", Detector: detector},
 		},
 		Store:        store,
 		Interactions: interactions,
@@ -64,8 +72,8 @@ func TestServiceReEvaluateInteractionStampsHistoricalVersion(t *testing.T) {
 		OccurredAt:     time.Date(2026, 6, 15, 14, 30, 0, 0, time.UTC),
 		DebtorTimezone: "America/Mexico_City",
 	}
-	interactions := fakeInteractionLookup{byInteractionID: map[string]evaluation.ReEvaluationInput{
-		"interaction-1": {TenantID: "tenant-a", Interaction: interaction},
+	interactions := &fakeInteractionLookup{byInteractionID: map[string]evaluation.ReEvaluationInput{
+		"tenant-a|interaction-1": {TenantID: "tenant-a", Interaction: interaction},
 	}}
 	bundles := fakeBundleVersionLookup{versions: map[string]string{
 		"tenant-a|bundle-v1": "v1",
@@ -74,11 +82,11 @@ func TestServiceReEvaluateInteractionStampsHistoricalVersion(t *testing.T) {
 	store := &fakeEvaluationStore{}
 	svc := reEvaluationService(store, interactions, bundles)
 
-	got1, err := svc.ReEvaluateInteraction(context.Background(), "interaction-1", "bundle-v1")
+	got1, err := svc.ReEvaluateInteraction(context.Background(), "tenant-a", "interaction-1", "bundle-v1")
 	if err != nil {
 		t.Fatalf("ReEvaluateInteraction (first call): %v", err)
 	}
-	got2, err := svc.ReEvaluateInteraction(context.Background(), "interaction-1", "bundle-v1")
+	got2, err := svc.ReEvaluateInteraction(context.Background(), "tenant-a", "interaction-1", "bundle-v1")
 	if err != nil {
 		t.Fatalf("ReEvaluateInteraction (second call): %v", err)
 	}
@@ -111,15 +119,15 @@ func TestServiceReEvaluateInteractionUnknownBundleFails(t *testing.T) {
 		OccurredAt:     time.Date(2026, 6, 15, 14, 30, 0, 0, time.UTC),
 		DebtorTimezone: "America/Mexico_City",
 	}
-	interactions := fakeInteractionLookup{byInteractionID: map[string]evaluation.ReEvaluationInput{
-		"interaction-1": {TenantID: "tenant-a", Interaction: interaction},
+	interactions := &fakeInteractionLookup{byInteractionID: map[string]evaluation.ReEvaluationInput{
+		"tenant-a|interaction-1": {TenantID: "tenant-a", Interaction: interaction},
 	}}
 	bundles := fakeBundleVersionLookup{versions: map[string]string{}} // no bundle known at all
 
 	store := &fakeEvaluationStore{}
 	svc := reEvaluationService(store, interactions, bundles)
 
-	_, err := svc.ReEvaluateInteraction(context.Background(), "interaction-1", "unknown-bundle")
+	_, err := svc.ReEvaluateInteraction(context.Background(), "tenant-a", "interaction-1", "unknown-bundle")
 	if !errors.Is(err, evaluation.ErrPolicyBundleNotFound) {
 		t.Fatalf("err = %v, want ErrPolicyBundleNotFound", err)
 	}
@@ -131,17 +139,54 @@ func TestServiceReEvaluateInteractionUnknownBundleFails(t *testing.T) {
 // TestServiceReEvaluateInteractionUnknownInteractionFails covers the
 // interaction-not-found half of the same requirement.
 func TestServiceReEvaluateInteractionUnknownInteractionFails(t *testing.T) {
-	interactions := fakeInteractionLookup{byInteractionID: map[string]evaluation.ReEvaluationInput{}}
+	interactions := &fakeInteractionLookup{byInteractionID: map[string]evaluation.ReEvaluationInput{}}
 	bundles := fakeBundleVersionLookup{versions: map[string]string{"tenant-a|bundle-v1": "v1"}}
 
 	store := &fakeEvaluationStore{}
 	svc := reEvaluationService(store, interactions, bundles)
 
-	_, err := svc.ReEvaluateInteraction(context.Background(), "unknown-interaction", "bundle-v1")
+	_, err := svc.ReEvaluateInteraction(context.Background(), "tenant-a", "unknown-interaction", "bundle-v1")
 	if !errors.Is(err, evaluation.ErrInteractionNotFound) {
 		t.Fatalf("err = %v, want ErrInteractionNotFound", err)
 	}
 	if len(store.calls) != 0 {
 		t.Fatalf("Store.CreateEvaluation was called %d times, want 0 on unknown interaction id", len(store.calls))
+	}
+}
+
+// TestServiceReEvaluateInteractionCrossTenantNeverRunsPipeline covers the
+// judgment-day finding that the tenant check must precede any re-evaluation
+// work: an interactionID that exists but belongs to a DIFFERENT tenant than
+// the authenticated caller must resolve to ErrInteractionNotFound WITHOUT
+// ever invoking a detector (and, by the same code path, without ever
+// invoking the judge) — sending a foreign tenant's transcript to an
+// external LLM judge before the tenant check is a data leak.
+func TestServiceReEvaluateInteractionCrossTenantNeverRunsPipeline(t *testing.T) {
+	interaction := detection.Interaction{
+		OccurredAt:     time.Date(2026, 6, 15, 14, 30, 0, 0, time.UTC),
+		DebtorTimezone: "America/Mexico_City",
+	}
+	// interaction-1 exists, but only for tenant-a. tenant-b requesting it is
+	// the cross-tenant case; the fake mirrors the real tenant-scoped SQL
+	// lookup, which simply has no row for (tenant-b, interaction-1).
+	interactions := &fakeInteractionLookup{byInteractionID: map[string]evaluation.ReEvaluationInput{
+		"tenant-a|interaction-1": {TenantID: "tenant-a", Interaction: interaction},
+	}}
+	bundles := fakeBundleVersionLookup{versions: map[string]string{"tenant-a|bundle-v1": "v1"}}
+
+	store := &fakeEvaluationStore{}
+	var detectorCalls int
+	detector := fakeDetector{result: detection.Result{Outcome: detection.OutcomePass}, calls: &detectorCalls}
+	svc := reEvaluationServiceWithDetector(store, interactions, bundles, detector)
+
+	_, err := svc.ReEvaluateInteraction(context.Background(), "tenant-b", "interaction-1", "bundle-v1")
+	if !errors.Is(err, evaluation.ErrInteractionNotFound) {
+		t.Fatalf("err = %v, want ErrInteractionNotFound", err)
+	}
+	if detectorCalls != 0 {
+		t.Fatalf("detector was invoked %d times, want 0 (tenant check must precede pipeline execution)", detectorCalls)
+	}
+	if len(store.calls) != 0 {
+		t.Fatalf("Store.CreateEvaluation was called %d times, want 0 on cross-tenant interaction id", len(store.calls))
 	}
 }

@@ -689,14 +689,14 @@ func (r *BundleResolverAdapter) ActiveBundle(ctx context.Context, tenantID strin
 
 var _ evaluation.BundleResolver = (*BundleResolverAdapter)(nil)
 
-// InteractionLookupAdapter resolves a stored interaction (and its transcript,
-// if any) by id for evaluation.Service.ReEvaluateInteraction, implementing
-// evaluation.InteractionLookup. It intentionally runs through the owner
-// connection with NO tenant scoping on the first query (the caller supplies
-// only an interactionID, not its tenant) — the resolved tenant_id is then
-// used to scope the transcript lookup, and the httpapi handler independently
-// re-verifies the resolved tenant against the authenticated caller before
-// responding, so this never leaks another tenant's evaluation outcome.
+// InteractionLookupAdapter resolves a stored interaction (and its
+// transcript, if any) by id for evaluation.Service.ReEvaluateInteraction,
+// implementing evaluation.InteractionLookup. The lookup is tenant-scoped
+// via tenantdb.WithTenantTx (RLS-restricted vigia_app role) using the
+// caller-supplied tenantID — a foreign-tenant or unknown interactionID
+// resolves to found=false BEFORE any bundle lookup or detector/judge
+// execution ever runs (judgment-day fix: the tenant check must precede
+// re-evaluation work, not follow it).
 type InteractionLookupAdapter struct {
 	db tenantdb.Beginner
 }
@@ -709,59 +709,67 @@ func NewInteractionLookupAdapterFromPool(pool *pgxpool.Pool) *InteractionLookupA
 	return NewInteractionLookupAdapter(poolBeginner{pool: pool})
 }
 
-func (a *InteractionLookupAdapter) GetInteractionForReEvaluation(ctx context.Context, interactionID string) (evaluation.ReEvaluationInput, bool, error) {
+func (a *InteractionLookupAdapter) GetInteractionForReEvaluation(ctx context.Context, tenantID, interactionID string) (evaluation.ReEvaluationInput, bool, error) {
 	interactionUUID, err := parseUUID(interactionID)
 	if err != nil {
 		return evaluation.ReEvaluationInput{}, false, err
 	}
-
-	tx, err := a.db.Begin(ctx)
+	tenantUUID, err := parseUUID(tenantID)
 	if err != nil {
 		return evaluation.ReEvaluationInput{}, false, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
-	row, err := vigiaDB.New(tx).GetInteractionEventByIDAnyTenant(ctx, interactionUUID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return evaluation.ReEvaluationInput{}, false, nil
+	var result evaluation.ReEvaluationInput
+	found := false
+	err = tenantdb.WithTenantTx(ctx, a.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		q := vigiaDB.New(tx)
+
+		row, err := q.GetInteractionEventByID(ctx, vigiaDB.GetInteractionEventByIDParams{
+			ID:       interactionUUID,
+			TenantID: tenantUUID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return err
 		}
-		return evaluation.ReEvaluationInput{}, false, err
-	}
-	tenantID := uuidString(row.TenantID)
 
-	var utterances []judge.Utterance
-	transcript, err := vigiaDB.New(tx).GetInteractionTranscriptByInteraction(ctx, vigiaDB.GetInteractionTranscriptByInteractionParams{
-		TenantID:           row.TenantID,
-		InteractionEventID: row.ID,
+		var utterances []judge.Utterance
+		transcript, err := q.GetInteractionTranscriptByInteraction(ctx, vigiaDB.GetInteractionTranscriptByInteractionParams{
+			TenantID:           row.TenantID,
+			InteractionEventID: row.ID,
+		})
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+		} else {
+			var stored []seedUtteranceShape
+			if err := json.Unmarshal(transcript.Utterances, &stored); err != nil {
+				return err
+			}
+			utterances = make([]judge.Utterance, 0, len(stored))
+			for _, u := range stored {
+				utterances = append(utterances, judge.Utterance{Speaker: u.Speaker, Text: u.Text})
+			}
+		}
+
+		result = evaluation.ReEvaluationInput{
+			TenantID: uuidString(row.TenantID),
+			Interaction: detection.Interaction{
+				OccurredAt:     row.OccurredAt.Time,
+				DebtorTimezone: row.DebtorTimezone,
+			},
+			Utterances: utterances,
+		}
+		found = true
+		return nil
 	})
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return evaluation.ReEvaluationInput{}, false, err
-		}
-	} else {
-		var stored []seedUtteranceShape
-		if err := json.Unmarshal(transcript.Utterances, &stored); err != nil {
-			return evaluation.ReEvaluationInput{}, false, err
-		}
-		utterances = make([]judge.Utterance, 0, len(stored))
-		for _, u := range stored {
-			utterances = append(utterances, judge.Utterance{Speaker: u.Speaker, Text: u.Text})
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
 		return evaluation.ReEvaluationInput{}, false, err
 	}
-
-	return evaluation.ReEvaluationInput{
-		TenantID: tenantID,
-		Interaction: detection.Interaction{
-			OccurredAt:     row.OccurredAt.Time,
-			DebtorTimezone: row.DebtorTimezone,
-		},
-		Utterances: utterances,
-	}, true, nil
+	return result, found, nil
 }
 
 var _ evaluation.InteractionLookup = (*InteractionLookupAdapter)(nil)

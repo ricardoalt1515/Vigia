@@ -420,7 +420,7 @@ type fakeReEvaluator struct {
 	calls   int
 }
 
-func (r *fakeReEvaluator) ReEvaluateInteraction(_ context.Context, interactionID, policyBundleID string) (core.Evaluation, error) {
+func (r *fakeReEvaluator) ReEvaluateInteraction(_ context.Context, _, interactionID, policyBundleID string) (core.Evaluation, error) {
 	r.calls++
 	if r.err != nil {
 		return core.Evaluation{}, r.err
