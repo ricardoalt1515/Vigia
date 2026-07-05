@@ -61,7 +61,7 @@ func TestGetInteractions(t *testing.T) {
 		},
 	}
 	summary := &fakeSummaryReader{countByTenant: map[string]int64{"tenant-a": 3}}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{})
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{})
 
 	t.Run("rejects unauthorized credentials before reading interactions", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/interactions", nil)
@@ -182,7 +182,7 @@ func TestGetSummary(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{countByTenant: map[string]int64{"tenant-a": 4, "tenant-b": 1}}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{})
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{})
 
 	t.Run("returns the tenant's out-of-hours count", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/summary", nil)
@@ -340,7 +340,7 @@ func TestGetEvidence(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, evidence, &fakeReEvaluator{})
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, evidence, &fakeReEvaluator{}, &fakeDashboardReader{})
 
 	t.Run("evaluated interaction exports and independently verifies", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/interactions/interaction-evidenced/evidence", nil)
@@ -407,6 +407,176 @@ func TestGetEvidence(t *testing.T) {
 	})
 }
 
+// fakeDashboardReader scopes both dashboard aggregates by tenantID, mirroring
+// fakeSummaryReader's tenant-keyed map so a fake can prove tenant isolation
+// the same way the real RLS-scoped adapter does.
+type fakeDashboardReader struct {
+	byDespachoByTenant map[string][]DespachoRate
+	byCauseByTenant    map[string][]CauseCount
+	err                error
+	byDespachoCalls    int
+	byCauseCalls       int
+	lastTenantID       string
+}
+
+func (r *fakeDashboardReader) ByDespacho(_ context.Context, tenantID string) ([]DespachoRate, error) {
+	r.byDespachoCalls++
+	r.lastTenantID = tenantID
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.byDespachoByTenant[tenantID], nil
+}
+
+func (r *fakeDashboardReader) ByCause(_ context.Context, tenantID string) ([]CauseCount, error) {
+	r.byCauseCalls++
+	r.lastTenantID = tenantID
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.byCauseByTenant[tenantID], nil
+}
+
+func TestGetDashboardByDespacho(t *testing.T) {
+	fixedTime := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	store := &fakeKeyStore{
+		records: map[string]auth.TenantAPIKey{
+			auth.HashAPIKey("tenant-a-key"): {ID: "key-a", TenantID: "tenant-a", KeyHash: auth.HashAPIKey("tenant-a-key"), Status: auth.StatusActive},
+			auth.HashAPIKey("tenant-b-key"): {ID: "key-b", TenantID: "tenant-b", KeyHash: auth.HashAPIKey("tenant-b-key"), Status: auth.StatusActive},
+		},
+	}
+	despachoAID := "despacho-a"
+	dashboards := &fakeDashboardReader{
+		byDespachoByTenant: map[string][]DespachoRate{
+			"tenant-a": {
+				{DespachoID: &despachoAID, DespachoName: "Despacho A", Total: 10, Violations: 5, ViolationRate: 0.5},
+				{DespachoID: nil, DespachoName: "unattributed", Total: 4, Violations: 1, ViolationRate: 0.25},
+			},
+			"tenant-b": {},
+		},
+	}
+	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
+	summary := &fakeSummaryReader{}
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, dashboards)
+
+	t.Run("rejects unauthorized credentials before reading despacho rates", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/dashboards/by-despacho", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+		if dashboards.byDespachoCalls != 0 {
+			t.Fatalf("byDespacho calls = %d, want 0", dashboards.byDespachoCalls)
+		}
+	})
+
+	t.Run("returns the ranked despacho rates including the unattributed bucket", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/dashboards/by-despacho", nil)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var response despachoRatesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if len(response.Despachos) != 2 {
+			t.Fatalf("despachos len = %d, want 2", len(response.Despachos))
+		}
+		first := response.Despachos[0]
+		if first.DespachoID == nil || *first.DespachoID != "despacho-a" || first.ViolationRate != 0.5 {
+			t.Fatalf("first despacho = %#v", first)
+		}
+		unattributed := response.Despachos[1]
+		if unattributed.DespachoID != nil {
+			t.Fatalf("unattributed DespachoID = %v, want nil", *unattributed.DespachoID)
+		}
+		if unattributed.DespachoName != "unattributed" {
+			t.Fatalf("unattributed DespachoName = %q, want unattributed", unattributed.DespachoName)
+		}
+		if dashboards.lastTenantID != "tenant-a" {
+			t.Fatalf("tenant id = %q, want tenant-a", dashboards.lastTenantID)
+		}
+	})
+
+	t.Run("by-despacho ranking is tenant-isolated", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/dashboards/by-despacho", nil)
+		req.Header.Set("Authorization", "Bearer tenant-b-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		var response despachoRatesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if len(response.Despachos) != 0 {
+			t.Fatalf("despachos len = %d, want 0 (must not include tenant-a's rows)", len(response.Despachos))
+		}
+	})
+}
+
+func TestGetDashboardByCause(t *testing.T) {
+	fixedTime := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	store := &fakeKeyStore{
+		records: map[string]auth.TenantAPIKey{
+			auth.HashAPIKey("tenant-a-key"): {ID: "key-a", TenantID: "tenant-a", KeyHash: auth.HashAPIKey("tenant-a-key"), Status: auth.StatusActive},
+		},
+	}
+	dashboards := &fakeDashboardReader{
+		byCauseByTenant: map[string][]CauseCount{
+			"tenant-a": {
+				{RuleCode: "MX-REDECO-03", Violations: 0, Warnings: 3},
+				{RuleCode: "MX-REDECO-04", Violations: 2, Warnings: 0},
+			},
+		},
+	}
+	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
+	summary := &fakeSummaryReader{}
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, dashboards)
+
+	t.Run("returns per-rule-code violations and warnings separately", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/dashboards/by-cause", nil)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var response causeCountsResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if len(response.Causes) != 2 {
+			t.Fatalf("causes len = %d, want 2", len(response.Causes))
+		}
+		disclosure := response.Causes[0]
+		if disclosure.RuleCode != "MX-REDECO-03" || disclosure.Violations != 0 || disclosure.Warnings != 3 {
+			t.Fatalf("disclosure cause = %#v, want warnings=3 violations=0", disclosure)
+		}
+	})
+
+	t.Run("rejects unauthorized credentials before reading cause counts", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/dashboards/by-cause", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+	})
+}
+
 // reevalKey scopes fakeReEvaluator lookups by (interactionID, policyBundleID)
 // so cases can distinguish "unknown interaction" from "unknown bundle".
 type reevalKey struct {
@@ -459,7 +629,7 @@ func TestReEvaluateInteraction(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, reevaluator)
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, reevaluator, &fakeDashboardReader{})
 
 	t.Run("valid historical bundle id returns 200 with stamped version/id", func(t *testing.T) {
 		body := strings.NewReader(`{"policy_bundle_id":"bundle-v1"}`)
@@ -529,7 +699,7 @@ func TestReEvaluateInteraction(t *testing.T) {
 				},
 			},
 		}
-		crossHandler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, crossTenantReevaluator)
+		crossHandler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, crossTenantReevaluator, &fakeDashboardReader{})
 
 		body := strings.NewReader(`{"policy_bundle_id":"cross-bundle"}`)
 		req := httptest.NewRequest(http.MethodPost, "/v1/interactions/interaction-cross/reevaluate", body)
