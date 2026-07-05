@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +37,62 @@ func TestComplaintPollWorkerEnqueuesAllFindings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("enqueued transitions mismatch\ngot:  %#v\nwant: %#v", got, want)
+	}
+}
+
+func TestComplaintPollWorkerContinuesAfterTenantErrorAndReturnsAggregate(t *testing.T) {
+	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+	store := &fakeComplaintPollStore{
+		tenants: []string{"tenant-fails", "tenant-continues"},
+		openCasesByTenant: map[string][]ComplaintCase{
+			"tenant-continues": {{ID: "case-continues", TenantID: "tenant-continues"}},
+		},
+		openErrByTenant: map[string]error{"tenant-fails": errors.New("open scan failed")},
+	}
+	enqueuer := &recordingTransitionEnqueuer{}
+	worker := NewComplaintPollWorker(store, enqueuer, ComplaintJobSettings{Now: func() time.Time { return now }})
+
+	err := worker.Work(context.Background(), &river.Job[ComplaintPollArgs]{})
+	if err == nil || !strings.Contains(err.Error(), "tenant-fails") || !strings.Contains(err.Error(), "open scan failed") {
+		t.Fatalf("poll work error = %v, want aggregate with failing tenant", err)
+	}
+
+	want := []ComplaintTransitionArgs{{TenantID: "tenant-continues", ComplaintCaseID: "case-continues", TransitionKind: string(TransitionRequestReview)}}
+	if !reflect.DeepEqual(enqueuer.args, want) {
+		t.Fatalf("enqueued transitions mismatch after tenant error\ngot:  %#v\nwant: %#v", enqueuer.args, want)
+	}
+}
+
+func TestComplaintPollWorkerContinuesAfterScanAndEnqueueErrors(t *testing.T) {
+	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
+	store := &fakeComplaintPollStore{
+		tenants: []string{"tenant-a"},
+		openCases: []ComplaintCase{
+			{ID: "case-enqueue-fails", TenantID: "tenant-a"},
+			{ID: "case-open-continues", TenantID: "tenant-a"},
+		},
+		slaDueErrByTenant: map[string]error{"tenant-a": errors.New("sla scan failed")},
+		expiredReviewCases: []ComplaintCase{
+			{ID: "case-ttl-continues", TenantID: "tenant-a"},
+		},
+		unprocessedReviews: []HumanReview{{ID: "review-approve", TenantID: "tenant-a", ComplaintCaseID: "case-review-continues", Decision: string(TransitionApprove)}},
+	}
+	enqueuer := &recordingTransitionEnqueuer{errByCaseID: map[string]error{"case-enqueue-fails": errors.New("enqueue failed")}}
+	worker := NewComplaintPollWorker(store, enqueuer, ComplaintJobSettings{Now: func() time.Time { return now }})
+
+	err := worker.Work(context.Background(), &river.Job[ComplaintPollArgs]{})
+	if err == nil || !strings.Contains(err.Error(), "enqueue failed") || !strings.Contains(err.Error(), "sla scan failed") {
+		t.Fatalf("poll work error = %v, want aggregate enqueue and scan errors", err)
+	}
+
+	want := []ComplaintTransitionArgs{
+		{TenantID: "tenant-a", ComplaintCaseID: "case-enqueue-fails", TransitionKind: string(TransitionRequestReview)},
+		{TenantID: "tenant-a", ComplaintCaseID: "case-open-continues", TransitionKind: string(TransitionRequestReview)},
+		{TenantID: "tenant-a", ComplaintCaseID: "case-ttl-continues", TransitionKind: string(TransitionTTLExpired)},
+		{TenantID: "tenant-a", ComplaintCaseID: "case-review-continues", TransitionKind: string(TransitionApprove), HumanReviewID: ptr("review-approve")},
+	}
+	if !reflect.DeepEqual(enqueuer.args, want) {
+		t.Fatalf("enqueued transitions mismatch after scan/enqueue errors\ngot:  %#v\nwant: %#v", enqueuer.args, want)
 	}
 }
 
@@ -130,29 +188,66 @@ type fakeComplaintPollStore struct {
 	slaDueCases        []ComplaintCase
 	expiredReviewCases []ComplaintCase
 	unprocessedReviews []HumanReview
+
+	openCasesByTenant          map[string][]ComplaintCase
+	slaDueCasesByTenant        map[string][]ComplaintCase
+	expiredReviewCasesByTenant map[string][]ComplaintCase
+	unprocessedReviewsByTenant map[string][]HumanReview
+
+	openErrByTenant          map[string]error
+	slaDueErrByTenant        map[string]error
+	expiredReviewErrByTenant map[string]error
+	reviewsErrByTenant       map[string]error
 }
 
 func (s *fakeComplaintPollStore) ListComplaintPollTenants(context.Context) ([]string, error) {
 	return s.tenants, nil
 }
-func (s *fakeComplaintPollStore) ListOpenComplaintCases(context.Context, string, int32) ([]ComplaintCase, error) {
+func (s *fakeComplaintPollStore) ListOpenComplaintCases(_ context.Context, tenantID string, _ int32) ([]ComplaintCase, error) {
+	if err := s.openErrByTenant[tenantID]; err != nil {
+		return nil, err
+	}
+	if rows, ok := s.openCasesByTenant[tenantID]; ok {
+		return rows, nil
+	}
 	return s.openCases, nil
 }
-func (s *fakeComplaintPollStore) ListSLADueComplaintCases(context.Context, string, time.Time, int32) ([]ComplaintCase, error) {
+func (s *fakeComplaintPollStore) ListSLADueComplaintCases(_ context.Context, tenantID string, _ time.Time, _ int32) ([]ComplaintCase, error) {
+	if err := s.slaDueErrByTenant[tenantID]; err != nil {
+		return nil, err
+	}
+	if rows, ok := s.slaDueCasesByTenant[tenantID]; ok {
+		return rows, nil
+	}
 	return s.slaDueCases, nil
 }
-func (s *fakeComplaintPollStore) ListExpiredReviewComplaintCases(context.Context, string, time.Time, int32) ([]ComplaintCase, error) {
+func (s *fakeComplaintPollStore) ListExpiredReviewComplaintCases(_ context.Context, tenantID string, _ time.Time, _ int32) ([]ComplaintCase, error) {
+	if err := s.expiredReviewErrByTenant[tenantID]; err != nil {
+		return nil, err
+	}
+	if rows, ok := s.expiredReviewCasesByTenant[tenantID]; ok {
+		return rows, nil
+	}
 	return s.expiredReviewCases, nil
 }
-func (s *fakeComplaintPollStore) ListUnprocessedHumanReviews(context.Context, string, int32) ([]HumanReview, error) {
+func (s *fakeComplaintPollStore) ListUnprocessedHumanReviews(_ context.Context, tenantID string, _ int32) ([]HumanReview, error) {
+	if err := s.reviewsErrByTenant[tenantID]; err != nil {
+		return nil, err
+	}
+	if rows, ok := s.unprocessedReviewsByTenant[tenantID]; ok {
+		return rows, nil
+	}
 	return s.unprocessedReviews, nil
 }
 
-type recordingTransitionEnqueuer struct{ args []ComplaintTransitionArgs }
+type recordingTransitionEnqueuer struct {
+	args        []ComplaintTransitionArgs
+	errByCaseID map[string]error
+}
 
 func (e *recordingTransitionEnqueuer) EnqueueComplaintTransition(_ context.Context, args ComplaintTransitionArgs) error {
 	e.args = append(e.args, args)
-	return nil
+	return e.errByCaseID[args.ComplaintCaseID]
 }
 
 type fakeTransitionStore struct {

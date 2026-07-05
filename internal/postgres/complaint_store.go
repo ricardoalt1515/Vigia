@@ -60,6 +60,9 @@ func (s *ComplaintCaseStore) CreateComplaintCase(ctx context.Context, in orchest
 			if err != nil {
 				return err
 			}
+			if !complaintCaseMatchesCreateInput(existing, interactionUUID, in) {
+				return orchestrator.ErrComplaintIdempotencyConflict
+			}
 			result = complaintCaseFromRow(existing, false)
 			return nil
 		}
@@ -426,6 +429,10 @@ func appendComplaintEvidence(ctx context.Context, q *vigiaDB.Queries, tenantUUID
 		return err
 	}
 	return q.UpdateChainHead(ctx, vigiaDB.UpdateChainHeadParams{TenantID: tenantUUID, LastSeq: seq, LastHash: hash})
+}
+
+func complaintCaseMatchesCreateInput(row vigiaDB.ComplaintCase, interactionUUID pgtype.UUID, in orchestrator.CreateComplaintCaseInput) bool {
+	return row.InteractionID == interactionUUID && row.RedecoCause == in.RedecoCause
 }
 
 func complaintCasesFromRows(rows []vigiaDB.ComplaintCase) []orchestrator.ComplaintCase {

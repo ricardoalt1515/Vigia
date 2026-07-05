@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,81 @@ func TestComplaintStoreCreatesCaseIdempotentlyAndAppendsOpenEvidenceOnce(t *test
 		t.Fatalf("complaint evidence rows = %d, want 1", evidenceCount)
 	}
 	_ = debtorID
+}
+
+func TestComplaintStoreRejectsMismatchedIdempotencyReplay(t *testing.T) {
+	databaseURL := requireDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+
+	tenantID, debtorID := seedTenantAndDebtor(t, ctx, pool, "complaint-idem-conflict")
+	interactionID := seedInteraction(t, ctx, pool, tenantID, debtorID, "complaint/idem-conflict-original")
+	otherInteractionID := seedInteraction(t, ctx, pool, tenantID, debtorID, "complaint/idem-conflict-other")
+	store := postgres.NewComplaintCaseStoreFromPool(pool)
+	openedAt := time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC)
+	slaDueAt := openedAt.AddDate(0, 0, 14)
+	original := orchestrator.CreateComplaintCaseInput{
+		TenantID:        tenantID,
+		InteractionID:   interactionID,
+		RedecoCause:     "improper_contact",
+		OpenedAt:        openedAt,
+		SLADueAt:        slaDueAt,
+		CalendarVersion: "mx-lft-art-74-2026a",
+		IdempotencyKey:  "idem-conflict-1",
+	}
+	created, err := store.CreateComplaintCase(ctx, original)
+	if err != nil {
+		t.Fatalf("CreateComplaintCase original: %v", err)
+	}
+
+	retry := original
+	retry.OpenedAt = original.OpenedAt.Add(10 * time.Minute)
+	retry.SLADueAt = original.SLADueAt.Add(24 * time.Hour)
+	retry.CalendarVersion = "mx-lft-art-74-2026b"
+	retried, err := store.CreateComplaintCase(ctx, retry)
+	if err != nil {
+		t.Fatalf("CreateComplaintCase same payload replay with recomputed server fields: %v", err)
+	}
+	if retried.ID != created.ID || retried.Created {
+		t.Fatalf("same payload replay = %#v, want existing case %s", retried, created.ID)
+	}
+
+	tests := []struct {
+		name string
+		in   orchestrator.CreateComplaintCaseInput
+	}{
+		{name: "interaction", in: func() orchestrator.CreateComplaintCaseInput {
+			in := original
+			in.InteractionID = otherInteractionID
+			return in
+		}()},
+		{name: "redeco cause", in: func() orchestrator.CreateComplaintCaseInput { in := original; in.RedecoCause = "harassment"; return in }()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := store.CreateComplaintCase(ctx, tt.in)
+			if !errors.Is(err, orchestrator.ErrComplaintIdempotencyConflict) {
+				t.Fatalf("CreateComplaintCase mismatched replay error = %v, want ErrComplaintIdempotencyConflict", err)
+			}
+			if got.ID != "" {
+				t.Fatalf("CreateComplaintCase mismatched replay returned case %#v, want zero value", got)
+			}
+		})
+	}
+
+	var caseCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM complaint_cases WHERE tenant_id = $1 AND idempotency_key = $2`, tenantID, original.IdempotencyKey).Scan(&caseCount); err != nil {
+		t.Fatalf("count complaint cases: %v", err)
+	}
+	if caseCount != 1 {
+		t.Fatalf("cases for reused idempotency key = %d, want 1", caseCount)
+	}
+	_ = created
 }
 
 func TestComplaintStoreTransitionNoOpDoesNotAppendEvidence(t *testing.T) {

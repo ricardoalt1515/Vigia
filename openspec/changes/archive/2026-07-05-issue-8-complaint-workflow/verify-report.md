@@ -80,3 +80,7 @@ Fresh review lenses were used during apply slices:
 ## Next Recommended
 
 Run SDD sync for `issue-8-complaint-workflow` after confirming whether to proceed. If preparing a PR, first run DB-backed verification in an environment with `DATABASE_URL` and `APP_DATABASE_URL` set, or rely on CI evidence if configured.
+
+## Post-Archive Remediation Note — 2026-07-05
+
+Final PR-readiness remediation addressed idempotency replay mismatches, restricted app-role complaint workflow write grants, and complaint poll worker starvation on tenant/scan/enqueue errors. DB-backed verification was run locally against a disposable Postgres 17 container on port 55432 with `DATABASE_URL` and `APP_DATABASE_URL` set; `go test ./...` passed in that DB-backed environment.

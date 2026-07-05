@@ -322,6 +322,10 @@ func TestRestrictedAppRoleIsLeastPrivilege(t *testing.T) {
 		t.Fatalf("vigia_app owns %d public tables, want 0", ownedTables)
 	}
 
+	complaintWorkflowWriteTables := map[string]bool{
+		"evidence_records":   true,
+		"ledger_chain_heads": true,
+	}
 	for _, table := range []string{
 		"tenant_api_keys",
 		"interaction_events",
@@ -347,8 +351,8 @@ func TestRestrictedAppRoleIsLeastPrivilege(t *testing.T) {
 			if err := db.QueryRowContext(ctx, `select has_table_privilege('vigia_app', 'public.' || $1, 'INSERT')`, table).Scan(&canInsert); err != nil {
 				t.Fatalf("query INSERT grant: %v", err)
 			}
-			if canInsert {
-				t.Fatalf("vigia_app can INSERT into %s; current RLS tests only require SELECT", table)
+			if canInsert != complaintWorkflowWriteTables[table] {
+				t.Fatalf("vigia_app INSERT privilege on %s = %t, want %t", table, canInsert, complaintWorkflowWriteTables[table])
 			}
 		})
 	}

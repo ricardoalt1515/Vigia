@@ -35,6 +35,22 @@ func TestComplaintWorkflowMigrationDefinesTenantScopedCasesAndReviews(t *testing
 	}
 }
 
+func TestComplaintWorkflowMigrationGrantsRestrictedAppWorkflowWrites(t *testing.T) {
+	migration := readComplaintWorkflowMigration(t)
+
+	for _, required := range []string{
+		"GRANT SELECT, INSERT, UPDATE ON complaint_cases TO vigia_app",
+		"GRANT SELECT, INSERT, UPDATE ON human_reviews TO vigia_app",
+		"GRANT SELECT ON business_day_holidays TO vigia_app",
+		"GRANT SELECT, INSERT ON evidence_records TO vigia_app",
+		"GRANT SELECT, INSERT, UPDATE ON ledger_chain_heads TO vigia_app",
+	} {
+		if !strings.Contains(migration, required) {
+			t.Fatalf("migration missing restricted app complaint workflow grant %q", required)
+		}
+	}
+}
+
 func TestComplaintWorkflowMigrationSeedsVersionedHolidayCalendar(t *testing.T) {
 	migration := readComplaintWorkflowMigration(t)
 
@@ -78,6 +94,8 @@ func TestComplaintWorkflowDownMigrationRefusesToEraseComplaintEvidence(t *testin
 	for _, forbidden := range []string{
 		"ALTER TABLE evidence_records DISABLE TRIGGER evidence_records_no_update_delete",
 		"DELETE FROM evidence_records WHERE record_kind = 'complaint_transition'",
+		"REVOKE SELECT, INSERT ON evidence_records FROM vigia_app",
+		"REVOKE SELECT, INSERT, UPDATE ON ledger_chain_heads FROM vigia_app",
 	} {
 		if strings.Contains(down, forbidden) {
 			t.Fatalf("down migration must not silently erase append-only complaint evidence; found %q", forbidden)
@@ -337,9 +355,9 @@ func TestComplaintWorkflowEvidenceConstraintsAgainstPostgres(t *testing.T) {
 		INSERT INTO evidence_records (
 			tenant_id, interaction_event_id, evaluation_id, seq, prev_hash, hash,
 			overall_outcome, policy_bundle_version, inputs_digest, created_at,
-			record_kind, complaint_case_id, transition_kind
+			record_kind, complaint_case_id, transition_kind, transition_from_state, transition_to_state
 		) VALUES ($1, NULL, NULL, $2, $3, $4, 'awaiting_review', '', '', now(),
-			'complaint_transition', $5, $6)
+			'complaint_transition', $5, $6, 'open', 'awaiting_review')
 	`
 	if _, err := conn.Exec(ctx, insertComplaintEvidence, tenantID, int64(1), "genesis", "hash-1", caseRow.ID, "request_review"); err != nil {
 		t.Fatalf("insert complaint_transition evidence row: %v", err)
@@ -398,6 +416,57 @@ func TestComplaintWorkflowRLSAgainstPostgres(t *testing.T) {
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantA); err != nil {
 		t.Fatalf("set app tenant context: %v", err)
+	}
+
+	var appCreatedCaseID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO complaint_cases (tenant_id, interaction_id, redeco_cause, state, opened_at, sla_due_at, calendar_version, idempotency_key)
+		VALUES ($1, $2, 'app_role_write', 'open', now(), now() + interval '10 days', 'mx-lft-art-74-2026a', 'app-role-create')
+		RETURNING id
+	`, tenantA, interactionA).Scan(&appCreatedCaseID); err != nil {
+		t.Fatalf("app role insert complaint_case with tenant context: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE complaint_cases
+		SET state = 'awaiting_review', review_expires_at = now() + interval '3 days', updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantA, appCreatedCaseID); err != nil {
+		t.Fatalf("app role update complaint_case transition fields: %v", err)
+	}
+	var appReviewID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO human_reviews (tenant_id, complaint_case_id, decision, reviewer, notes)
+		VALUES ($1, $2, 'approve', 'app-reviewer@example.test', 'ok')
+		RETURNING id
+	`, tenantA, appCreatedCaseID).Scan(&appReviewID); err != nil {
+		t.Fatalf("app role insert human_review: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE human_reviews
+		SET processed_at = now(), updated_at = now()
+		WHERE tenant_id = $1 AND id = $2
+	`, tenantA, appReviewID); err != nil {
+		t.Fatalf("app role update human_review processing fields: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO ledger_chain_heads (tenant_id, last_seq, last_hash)
+		VALUES ($1, 0, 'genesis')
+		ON CONFLICT (tenant_id) DO UPDATE SET last_seq = ledger_chain_heads.last_seq
+	`, tenantA); err != nil {
+		t.Fatalf("app role insert/lock ledger_chain_heads: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO evidence_records (
+			tenant_id, interaction_event_id, evaluation_id, seq, prev_hash, hash,
+			overall_outcome, policy_bundle_version, inputs_digest, created_at,
+			record_kind, complaint_case_id, transition_kind, transition_from_state, transition_to_state, human_review_id
+		) VALUES ($1, NULL, NULL, 1, 'genesis', 'hash-app-role', 'awaiting_review', '', '', now(),
+			'complaint_transition', $2, 'request_review', 'open', 'awaiting_review', NULL)
+	`, tenantA, appCreatedCaseID); err != nil {
+		t.Fatalf("app role insert complaint transition evidence: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE ledger_chain_heads SET last_seq = 1, last_hash = 'hash-app-role' WHERE tenant_id = $1`, tenantA); err != nil {
+		t.Fatalf("app role update ledger_chain_heads: %v", err)
 	}
 
 	var visibleTenantCount int

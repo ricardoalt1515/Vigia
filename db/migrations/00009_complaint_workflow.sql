@@ -84,9 +84,11 @@ INSERT INTO business_day_holidays (calendar_version, holiday_date, label, source
     ('mx-lft-art-74-2026a', DATE '2026-11-16', 'Revolution Day observed', 'LFT Art. 74 statutory holiday; pending counsel confirmation'),
     ('mx-lft-art-74-2026a', DATE '2026-12-25', 'Christmas Day', 'LFT Art. 74 statutory holiday; pending counsel confirmation');
 
-GRANT SELECT ON complaint_cases TO vigia_app;
-GRANT SELECT ON human_reviews TO vigia_app;
+GRANT SELECT, INSERT, UPDATE ON complaint_cases TO vigia_app;
+GRANT SELECT, INSERT, UPDATE ON human_reviews TO vigia_app;
 GRANT SELECT ON business_day_holidays TO vigia_app;
+GRANT SELECT, INSERT ON evidence_records TO vigia_app;
+GRANT SELECT, INSERT, UPDATE ON ledger_chain_heads TO vigia_app;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -155,9 +157,11 @@ ALTER TABLE evidence_records DROP COLUMN IF EXISTS transition_from_state;
 ALTER TABLE evidence_records DROP COLUMN IF EXISTS transition_kind;
 ALTER TABLE evidence_records DROP COLUMN IF EXISTS complaint_case_id;
 ALTER TABLE evidence_records DROP COLUMN IF EXISTS record_kind;
+REVOKE INSERT, UPDATE ON ledger_chain_heads FROM vigia_app;
+REVOKE INSERT ON evidence_records FROM vigia_app;
 REVOKE SELECT ON business_day_holidays FROM vigia_app;
-REVOKE SELECT ON human_reviews FROM vigia_app;
-REVOKE SELECT ON complaint_cases FROM vigia_app;
+REVOKE SELECT, INSERT, UPDATE ON human_reviews FROM vigia_app;
+REVOKE SELECT, INSERT, UPDATE ON complaint_cases FROM vigia_app;
 DROP TABLE IF EXISTS business_day_holidays;
 DROP TABLE IF EXISTS human_reviews;
 DROP TABLE IF EXISTS complaint_cases;

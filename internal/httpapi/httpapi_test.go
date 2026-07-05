@@ -781,6 +781,21 @@ func TestComplaintEndpoints(t *testing.T) {
 		}
 	})
 
+	t.Run("mismatched idempotency replay maps to conflict", func(t *testing.T) {
+		complaints.createErr = orchestrator.ErrComplaintIdempotencyConflict
+		defer func() { complaints.createErr = nil }()
+		body := strings.NewReader(`{"idempotency_key":"idem-conflict","interaction_id":"11111111-1111-1111-1111-111111111111","redeco_cause":"different_cause"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/complaints", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusConflict, rec.Body.String())
+		}
+	})
+
 	t.Run("accepts idempotency key from header when body omits it", func(t *testing.T) {
 		body := strings.NewReader(`{"interaction_id":"22222222-2222-2222-2222-222222222222","redeco_cause":"harassment"}`)
 		req := httptest.NewRequest(http.MethodPost, "/v1/complaints", body)
@@ -793,10 +808,10 @@ func TestComplaintEndpoints(t *testing.T) {
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusCreated, rec.Body.String())
 		}
-		if len(complaints.createInputs) != 3 {
-			t.Fatalf("create calls = %d, want 3", len(complaints.createInputs))
+		if len(complaints.createInputs) != 4 {
+			t.Fatalf("create calls = %d, want 4", len(complaints.createInputs))
 		}
-		if got := complaints.createInputs[2].IdempotencyKey; got != "header-idem" {
+		if got := complaints.createInputs[3].IdempotencyKey; got != "header-idem" {
 			t.Fatalf("idempotency key = %q, want header-idem", got)
 		}
 	})
@@ -813,10 +828,10 @@ func TestComplaintEndpoints(t *testing.T) {
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusCreated, rec.Body.String())
 		}
-		if len(complaints.createInputs) != 4 {
-			t.Fatalf("create calls = %d, want 4", len(complaints.createInputs))
+		if len(complaints.createInputs) != 5 {
+			t.Fatalf("create calls = %d, want 5", len(complaints.createInputs))
 		}
-		if got := complaints.createInputs[3].IdempotencyKey; got != "same-idem" {
+		if got := complaints.createInputs[4].IdempotencyKey; got != "same-idem" {
 			t.Fatalf("idempotency key = %q, want same-idem", got)
 		}
 	})
@@ -877,6 +892,7 @@ type fakeComplaintWorkflow struct {
 	createInputs  []orchestrator.CreateComplaintCaseInput
 	reviewResults []HumanReview
 	reviewInputs  []CreateHumanReviewInput
+	createErr     error
 	reviewErr     error
 }
 
@@ -886,6 +902,9 @@ func (f *fakeComplaintWorkflow) ListBusinessDayHolidays(ctx context.Context, ver
 
 func (f *fakeComplaintWorkflow) CreateComplaintCase(ctx context.Context, in orchestrator.CreateComplaintCaseInput) (orchestrator.ComplaintCase, error) {
 	f.createInputs = append(f.createInputs, in)
+	if f.createErr != nil {
+		return orchestrator.ComplaintCase{}, f.createErr
+	}
 	if len(f.createResults) == 0 {
 		return orchestrator.ComplaintCase{}, errors.New("missing fake create result")
 	}

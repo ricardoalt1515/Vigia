@@ -240,6 +240,10 @@ func (s *Server) handleCreateComplaint(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey:  idempotencyKey,
 	})
 	if err != nil {
+		if errors.Is(err, orchestrator.ErrComplaintIdempotencyConflict) {
+			writeError(w, http.StatusConflict)
+			return
+		}
 		writeError(w, http.StatusInternalServerError)
 		return
 	}

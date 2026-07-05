@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -114,61 +115,68 @@ func (w *ComplaintPollWorker) Work(ctx context.Context, _ *river.Job[ComplaintPo
 	if err != nil {
 		return err
 	}
+	var errs []error
 	for _, tenantID := range tenants {
 		if err := w.enqueueTenantFindings(ctx, tenantID, now, limit); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("poll tenant %s: %w", tenantID, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (w *ComplaintPollWorker) enqueueTenantFindings(ctx context.Context, tenantID string, now time.Time, limit int32) error {
+	var errs []error
+
 	openCases, err := w.store.ListOpenComplaintCases(ctx, tenantID, limit)
 	if err != nil {
-		return err
-	}
-	for _, item := range openCases {
-		if err := w.enqueuer.EnqueueComplaintTransition(ctx, transitionArgs(item, TransitionRequestReview, nil)); err != nil {
-			return err
+		errs = append(errs, fmt.Errorf("list open complaint cases: %w", err))
+	} else {
+		for _, item := range openCases {
+			if err := w.enqueuer.EnqueueComplaintTransition(ctx, transitionArgs(item, TransitionRequestReview, nil)); err != nil {
+				errs = append(errs, fmt.Errorf("enqueue request_review for complaint case %s: %w", item.ID, err))
+			}
 		}
 	}
 
 	slaDueCases, err := w.store.ListSLADueComplaintCases(ctx, tenantID, now, limit)
 	if err != nil {
-		return err
-	}
-	for _, item := range slaDueCases {
-		if err := w.enqueuer.EnqueueComplaintTransition(ctx, transitionArgs(item, TransitionSLABreach, nil)); err != nil {
-			return err
+		errs = append(errs, fmt.Errorf("list SLA-due complaint cases: %w", err))
+	} else {
+		for _, item := range slaDueCases {
+			if err := w.enqueuer.EnqueueComplaintTransition(ctx, transitionArgs(item, TransitionSLABreach, nil)); err != nil {
+				errs = append(errs, fmt.Errorf("enqueue sla_breach for complaint case %s: %w", item.ID, err))
+			}
 		}
 	}
 
 	expiredCases, err := w.store.ListExpiredReviewComplaintCases(ctx, tenantID, now, limit)
 	if err != nil {
-		return err
-	}
-	for _, item := range expiredCases {
-		if err := w.enqueuer.EnqueueComplaintTransition(ctx, transitionArgs(item, TransitionTTLExpired, nil)); err != nil {
-			return err
+		errs = append(errs, fmt.Errorf("list expired-review complaint cases: %w", err))
+	} else {
+		for _, item := range expiredCases {
+			if err := w.enqueuer.EnqueueComplaintTransition(ctx, transitionArgs(item, TransitionTTLExpired, nil)); err != nil {
+				errs = append(errs, fmt.Errorf("enqueue ttl_expired for complaint case %s: %w", item.ID, err))
+			}
 		}
 	}
 
 	reviews, err := w.store.ListUnprocessedHumanReviews(ctx, tenantID, limit)
 	if err != nil {
-		return err
-	}
-	for _, review := range reviews {
-		kind := ComplaintTransitionKind(review.Decision)
-		if !kind.AllowsHumanReviewID() {
-			continue
+		errs = append(errs, fmt.Errorf("list unprocessed human reviews: %w", err))
+	} else {
+		for _, review := range reviews {
+			kind := ComplaintTransitionKind(review.Decision)
+			if !kind.AllowsHumanReviewID() {
+				continue
+			}
+			reviewID := review.ID
+			args := ComplaintTransitionArgs{TenantID: review.TenantID, ComplaintCaseID: review.ComplaintCaseID, TransitionKind: string(kind), HumanReviewID: &reviewID}
+			if err := w.enqueuer.EnqueueComplaintTransition(ctx, args); err != nil {
+				errs = append(errs, fmt.Errorf("enqueue %s for human review %s: %w", kind, review.ID, err))
+			}
 		}
-		reviewID := review.ID
-		args := ComplaintTransitionArgs{TenantID: review.TenantID, ComplaintCaseID: review.ComplaintCaseID, TransitionKind: string(kind), HumanReviewID: &reviewID}
-		if err := w.enqueuer.EnqueueComplaintTransition(ctx, args); err != nil {
-			return err
-		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func transitionArgs(item ComplaintCase, kind ComplaintTransitionKind, humanReviewID *string) ComplaintTransitionArgs {
