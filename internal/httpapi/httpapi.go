@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/ricardoalt1515/vigia/internal/auth"
 	"github.com/ricardoalt1515/vigia/internal/core"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
+	"github.com/ricardoalt1515/vigia/internal/orchestrator"
 )
 
 // Interaction is the API DTO for GET /v1/interactions. Outcome, Reason,
@@ -101,6 +104,23 @@ type ReEvaluator interface {
 	ReEvaluateInteraction(ctx context.Context, tenantID, interactionID, policyBundleID string) (core.Evaluation, error)
 }
 
+type ComplaintWorkflow interface {
+	CreateComplaintCase(ctx context.Context, in orchestrator.CreateComplaintCaseInput) (orchestrator.ComplaintCase, error)
+	CreateHumanReview(ctx context.Context, in CreateHumanReviewInput) (HumanReview, error)
+	ListBusinessDayHolidays(ctx context.Context, version string) ([]orchestrator.HolidayRow, error)
+}
+
+type CreateHumanReviewInput = orchestrator.CreateHumanReviewInput
+
+type HumanReview = orchestrator.HumanReview
+
+var ErrComplaintReviewConflict = errors.New("httpapi: complaint review conflict")
+
+const (
+	defaultComplaintCalendarVersion = "mx-lft-art-74-2026a"
+	complaintSLABusinessDays        = 10
+)
+
 type Server struct {
 	authenticator *auth.Authenticator
 	interactions  InteractionReader
@@ -108,10 +128,12 @@ type Server struct {
 	evidence      EvidenceReader
 	reevaluator   ReEvaluator
 	dashboards    DashboardReader
+	complaints    ComplaintWorkflow
+	now           func() time.Time
 	mux           *http.ServeMux
 }
 
-func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader, evidence EvidenceReader, reevaluator ReEvaluator, dashboards DashboardReader) *Server {
+func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader, evidence EvidenceReader, reevaluator ReEvaluator, dashboards DashboardReader, complaints ComplaintWorkflow) *Server {
 	s := &Server{
 		authenticator: authenticator,
 		interactions:  interactions,
@@ -119,6 +141,8 @@ func NewServer(authenticator *auth.Authenticator, interactions InteractionReader
 		evidence:      evidence,
 		reevaluator:   reevaluator,
 		dashboards:    dashboards,
+		complaints:    complaints,
+		now:           time.Now,
 		mux:           http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /v1/interactions", s.handleGetInteractions)
@@ -127,11 +151,156 @@ func NewServer(authenticator *auth.Authenticator, interactions InteractionReader
 	s.mux.HandleFunc("POST /v1/interactions/{id}/reevaluate", s.handleReEvaluate)
 	s.mux.HandleFunc("GET /v1/dashboards/by-despacho", s.handleGetDashboardByDespacho)
 	s.mux.HandleFunc("GET /v1/dashboards/by-cause", s.handleGetDashboardByCause)
+	s.mux.HandleFunc("POST /v1/complaints", s.handleCreateComplaint)
+	s.mux.HandleFunc("POST /v1/complaints/{id}/reviews", s.handleCreateComplaintReview)
 	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
+}
+
+type createComplaintRequest struct {
+	IdempotencyKey string `json:"idempotency_key"`
+	InteractionID  string `json:"interaction_id"`
+	RedecoCause    string `json:"redeco_cause"`
+}
+
+type complaintCaseResponse struct {
+	ID              string     `json:"id"`
+	TenantID        string     `json:"tenant_id"`
+	InteractionID   string     `json:"interaction_id"`
+	RedecoCause     string     `json:"redeco_cause"`
+	State           string     `json:"state"`
+	OpenedAt        time.Time  `json:"opened_at"`
+	SLADueAt        time.Time  `json:"sla_due_at"`
+	CalendarVersion string     `json:"calendar_version"`
+	ReviewExpiresAt *time.Time `json:"review_expires_at,omitempty"`
+	ResolvedAt      *time.Time `json:"resolved_at,omitempty"`
+	IdempotencyKey  string     `json:"idempotency_key"`
+}
+
+type createComplaintReviewRequest struct {
+	Decision string `json:"decision"`
+	Reviewer string `json:"reviewer"`
+	Notes    string `json:"notes"`
+}
+
+type complaintReviewResponse struct {
+	Review HumanReview `json:"review"`
+}
+
+func (s *Server) handleCreateComplaint(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	if s.complaints == nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	var req createComplaintRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
+	headerIdempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey != "" && headerIdempotencyKey != "" && idempotencyKey != headerIdempotencyKey {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	if idempotencyKey == "" {
+		idempotencyKey = headerIdempotencyKey
+	}
+	if idempotencyKey == "" || req.InteractionID == "" || req.RedecoCause == "" {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+
+	openedAt := s.now().UTC().Truncate(time.Microsecond)
+	holidays, err := s.complaints.ListBusinessDayHolidays(r.Context(), defaultComplaintCalendarVersion)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	caseRow, err := s.complaints.CreateComplaintCase(r.Context(), orchestrator.CreateComplaintCaseInput{
+		TenantID:        tenant.TenantID,
+		InteractionID:   req.InteractionID,
+		RedecoCause:     req.RedecoCause,
+		OpenedAt:        openedAt,
+		SLADueAt:        orchestrator.AddBusinessDays(openedAt, complaintSLABusinessDays, orchestrator.LoadCalendar(defaultComplaintCalendarVersion, holidays)),
+		CalendarVersion: defaultComplaintCalendarVersion,
+		IdempotencyKey:  idempotencyKey,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	status := http.StatusOK
+	if caseRow.Created {
+		status = http.StatusCreated
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(complaintCaseFromDomain(caseRow))
+}
+
+func (s *Server) handleCreateComplaintReview(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	if s.complaints == nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	var req createComplaintReviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	if (req.Decision != string(orchestrator.TransitionApprove) && req.Decision != string(orchestrator.TransitionOverride)) || req.Reviewer == "" {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+
+	review, err := s.complaints.CreateHumanReview(r.Context(), CreateHumanReviewInput{
+		TenantID:        tenant.TenantID,
+		ComplaintCaseID: r.PathValue("id"),
+		Decision:        req.Decision,
+		Reviewer:        req.Reviewer,
+		Notes:           req.Notes,
+	})
+	if err != nil {
+		if errors.Is(err, ErrComplaintReviewConflict) || errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(complaintReviewResponse{Review: review})
+}
+
+func complaintCaseFromDomain(item orchestrator.ComplaintCase) complaintCaseResponse {
+	return complaintCaseResponse{ID: item.ID, TenantID: item.TenantID, InteractionID: item.InteractionID, RedecoCause: item.RedecoCause, State: item.State, OpenedAt: item.OpenedAt, SLADueAt: item.SLADueAt, CalendarVersion: item.CalendarVersion, ReviewExpiresAt: item.ReviewExpiresAt, ResolvedAt: item.ResolvedAt, IdempotencyKey: item.IdempotencyKey}
 }
 
 type interactionsResponse struct {

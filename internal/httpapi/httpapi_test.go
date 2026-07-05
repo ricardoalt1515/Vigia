@@ -14,6 +14,7 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/core"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
+	"github.com/ricardoalt1515/vigia/internal/orchestrator"
 )
 
 func TestGetInteractions(t *testing.T) {
@@ -61,7 +62,7 @@ func TestGetInteractions(t *testing.T) {
 		},
 	}
 	summary := &fakeSummaryReader{countByTenant: map[string]int64{"tenant-a": 3}}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{})
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{}, nil)
 
 	t.Run("rejects unauthorized credentials before reading interactions", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/interactions", nil)
@@ -182,7 +183,7 @@ func TestGetSummary(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{countByTenant: map[string]int64{"tenant-a": 4, "tenant-b": 1}}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{})
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{}, nil)
 
 	t.Run("returns the tenant's out-of-hours count", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/summary", nil)
@@ -340,7 +341,7 @@ func TestGetEvidence(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, evidence, &fakeReEvaluator{}, &fakeDashboardReader{})
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, evidence, &fakeReEvaluator{}, &fakeDashboardReader{}, nil)
 
 	t.Run("evaluated interaction exports and independently verifies", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/interactions/interaction-evidenced/evidence", nil)
@@ -457,7 +458,7 @@ func TestGetDashboardByDespacho(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, dashboards)
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, dashboards, nil)
 
 	t.Run("rejects unauthorized credentials before reading despacho rates", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/dashboards/by-despacho", nil)
@@ -540,7 +541,7 @@ func TestGetDashboardByCause(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, dashboards)
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, &fakeReEvaluator{}, dashboards, nil)
 
 	t.Run("returns per-rule-code violations and warnings separately", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/dashboards/by-cause", nil)
@@ -629,7 +630,7 @@ func TestReEvaluateInteraction(t *testing.T) {
 	}
 	reader := &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}
 	summary := &fakeSummaryReader{}
-	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, reevaluator, &fakeDashboardReader{})
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, reevaluator, &fakeDashboardReader{}, nil)
 
 	t.Run("valid historical bundle id returns 200 with stamped version/id", func(t *testing.T) {
 		body := strings.NewReader(`{"policy_bundle_id":"bundle-v1"}`)
@@ -699,7 +700,7 @@ func TestReEvaluateInteraction(t *testing.T) {
 				},
 			},
 		}
-		crossHandler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, crossTenantReevaluator, &fakeDashboardReader{})
+		crossHandler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), reader, summary, &fakeEvidenceReader{}, crossTenantReevaluator, &fakeDashboardReader{}, nil)
 
 		body := strings.NewReader(`{"policy_bundle_id":"cross-bundle"}`)
 		req := httptest.NewRequest(http.MethodPost, "/v1/interactions/interaction-cross/reevaluate", body)
@@ -712,4 +713,196 @@ func TestReEvaluateInteraction(t *testing.T) {
 			t.Fatalf("status = %d, want %d (result tenant_id must never leak across the authenticated caller's tenant)", rec.Code, http.StatusNotFound)
 		}
 	})
+}
+
+func TestComplaintEndpoints(t *testing.T) {
+	fixedTime := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeKeyStore{records: map[string]auth.TenantAPIKey{
+		auth.HashAPIKey("tenant-a-key"): {ID: "key-a", TenantID: "tenant-a", KeyHash: auth.HashAPIKey("tenant-a-key"), Status: auth.StatusActive},
+	}}
+	complaints := &fakeComplaintWorkflow{
+		holidays: []orchestrator.HolidayRow{},
+		createResults: []orchestrator.ComplaintCase{
+			{ID: "case-1", TenantID: "tenant-a", InteractionID: "11111111-1111-1111-1111-111111111111", RedecoCause: "improper_contact", State: "open", OpenedAt: fixedTime, SLADueAt: fixedTime.AddDate(0, 0, 14), CalendarVersion: "mx-lft-art-74-2026a", IdempotencyKey: "idem-1", Created: true},
+			{ID: "case-1", TenantID: "tenant-a", InteractionID: "11111111-1111-1111-1111-111111111111", RedecoCause: "improper_contact", State: "open", OpenedAt: fixedTime, SLADueAt: fixedTime.AddDate(0, 0, 14), CalendarVersion: "mx-lft-art-74-2026a", IdempotencyKey: "idem-1", Created: false},
+			{ID: "case-2", TenantID: "tenant-a", InteractionID: "22222222-2222-2222-2222-222222222222", RedecoCause: "harassment", State: "open", OpenedAt: fixedTime, SLADueAt: fixedTime.AddDate(0, 0, 14), CalendarVersion: "mx-lft-art-74-2026a", IdempotencyKey: "header-idem", Created: true},
+			{ID: "case-3", TenantID: "tenant-a", InteractionID: "33333333-3333-3333-3333-333333333333", RedecoCause: "harassment", State: "open", OpenedAt: fixedTime, SLADueAt: fixedTime.AddDate(0, 0, 14), CalendarVersion: "mx-lft-art-74-2026a", IdempotencyKey: "same-idem", Created: true},
+		},
+	}
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), &fakeInteractionReader{itemsByTenant: map[string][]Interaction{}}, &fakeSummaryReader{}, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{}, complaints)
+	handler.now = func() time.Time { return fixedTime }
+
+	t.Run("creates complaint case with computed SLA input", func(t *testing.T) {
+		body := strings.NewReader(`{"idempotency_key":"idem-1","interaction_id":"11111111-1111-1111-1111-111111111111","redeco_cause":"improper_contact"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/complaints", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+		if len(complaints.createInputs) != 1 {
+			t.Fatalf("create calls = %d, want 1", len(complaints.createInputs))
+		}
+		in := complaints.createInputs[0]
+		if in.TenantID != "tenant-a" || in.IdempotencyKey != "idem-1" || in.RedecoCause != "improper_contact" {
+			t.Fatalf("create input = %#v", in)
+		}
+		if in.CalendarVersion != defaultComplaintCalendarVersion {
+			t.Fatalf("calendar version = %q", in.CalendarVersion)
+		}
+		if !in.SLADueAt.Equal(orchestrator.AddBusinessDays(fixedTime, 10, orchestrator.LoadCalendar(defaultComplaintCalendarVersion, nil))) {
+			t.Fatalf("SLADueAt = %s", in.SLADueAt)
+		}
+		var got complaintCaseResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if got.ID != "case-1" || got.State != "open" || got.IdempotencyKey != "idem-1" {
+			t.Fatalf("response = %#v", got)
+		}
+	})
+
+	t.Run("idempotent repeat returns existing case with 200", func(t *testing.T) {
+		body := strings.NewReader(`{"idempotency_key":"idem-1","interaction_id":"11111111-1111-1111-1111-111111111111","redeco_cause":"improper_contact"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/complaints", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if len(complaints.createInputs) != 2 {
+			t.Fatalf("create calls = %d, want 2", len(complaints.createInputs))
+		}
+	})
+
+	t.Run("accepts idempotency key from header when body omits it", func(t *testing.T) {
+		body := strings.NewReader(`{"interaction_id":"22222222-2222-2222-2222-222222222222","redeco_cause":"harassment"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/complaints", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		req.Header.Set("Idempotency-Key", "header-idem")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+		if len(complaints.createInputs) != 3 {
+			t.Fatalf("create calls = %d, want 3", len(complaints.createInputs))
+		}
+		if got := complaints.createInputs[2].IdempotencyKey; got != "header-idem" {
+			t.Fatalf("idempotency key = %q, want header-idem", got)
+		}
+	})
+
+	t.Run("accepts matching header and body idempotency keys", func(t *testing.T) {
+		body := strings.NewReader(`{"idempotency_key":"same-idem","interaction_id":"33333333-3333-3333-3333-333333333333","redeco_cause":"harassment"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/complaints", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		req.Header.Set("Idempotency-Key", "same-idem")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+		if len(complaints.createInputs) != 4 {
+			t.Fatalf("create calls = %d, want 4", len(complaints.createInputs))
+		}
+		if got := complaints.createInputs[3].IdempotencyKey; got != "same-idem" {
+			t.Fatalf("idempotency key = %q, want same-idem", got)
+		}
+	})
+
+	t.Run("rejects mismatched header and body idempotency keys", func(t *testing.T) {
+		before := len(complaints.createInputs)
+		body := strings.NewReader(`{"idempotency_key":"body-idem","interaction_id":"33333333-3333-3333-3333-333333333333","redeco_cause":"harassment"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/complaints", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		req.Header.Set("Idempotency-Key", "header-idem")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusBadRequest, rec.Body.String())
+		}
+		if len(complaints.createInputs) != before {
+			t.Fatalf("create calls = %d, want %d", len(complaints.createInputs), before)
+		}
+	})
+
+	t.Run("accepts human review for awaiting complaint", func(t *testing.T) {
+		complaints.reviewResults = []HumanReview{{ID: "review-1", TenantID: "tenant-a", ComplaintCaseID: "case-awaiting", Decision: "approve", Reviewer: "ops@example.com", Notes: "ok", CreatedAt: fixedTime}}
+		body := strings.NewReader(`{"decision":"approve","reviewer":"ops@example.com","notes":"ok"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/complaints/case-awaiting/reviews", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusAccepted, rec.Body.String())
+		}
+		if len(complaints.reviewInputs) != 1 || complaints.reviewInputs[0].TenantID != "tenant-a" || complaints.reviewInputs[0].Decision != "approve" {
+			t.Fatalf("review inputs = %#v", complaints.reviewInputs)
+		}
+	})
+
+	t.Run("late review returns conflict and records nothing", func(t *testing.T) {
+		complaints.reviewErr = ErrComplaintReviewConflict
+		body := strings.NewReader(`{"decision":"approve","reviewer":"ops@example.com"}`)
+		req := httptest.NewRequest(http.MethodPost, "/v1/complaints/case-escalated/reviews", body)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusConflict, rec.Body.String())
+		}
+	})
+}
+
+type fakeComplaintWorkflow struct {
+	holidays      []orchestrator.HolidayRow
+	createResults []orchestrator.ComplaintCase
+	createInputs  []orchestrator.CreateComplaintCaseInput
+	reviewResults []HumanReview
+	reviewInputs  []CreateHumanReviewInput
+	reviewErr     error
+}
+
+func (f *fakeComplaintWorkflow) ListBusinessDayHolidays(ctx context.Context, version string) ([]orchestrator.HolidayRow, error) {
+	return f.holidays, nil
+}
+
+func (f *fakeComplaintWorkflow) CreateComplaintCase(ctx context.Context, in orchestrator.CreateComplaintCaseInput) (orchestrator.ComplaintCase, error) {
+	f.createInputs = append(f.createInputs, in)
+	if len(f.createResults) == 0 {
+		return orchestrator.ComplaintCase{}, errors.New("missing fake create result")
+	}
+	out := f.createResults[0]
+	f.createResults = f.createResults[1:]
+	return out, nil
+}
+
+func (f *fakeComplaintWorkflow) CreateHumanReview(ctx context.Context, in CreateHumanReviewInput) (HumanReview, error) {
+	f.reviewInputs = append(f.reviewInputs, in)
+	if f.reviewErr != nil {
+		return HumanReview{}, f.reviewErr
+	}
+	if len(f.reviewResults) == 0 {
+		return HumanReview{}, errors.New("missing fake review result")
+	}
+	out := f.reviewResults[0]
+	f.reviewResults = f.reviewResults[1:]
+	return out, nil
 }

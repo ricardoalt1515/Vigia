@@ -220,12 +220,20 @@ type MerkleCheckpoint struct { ID, TenantID, Period, RootHash, RFC3161Token, Rec
 
 type GoldenCase  struct { ID, RuleID, Transcript, ExpectedOutcome, HumanLabel, Notes string; Version int }
 type ComplaintCase struct { // durable state machine source of truth (ADR-01)
-    ID, TenantID string; InteractionID *string; RedecoCause string
+    ID, TenantID, InteractionID, RedecoCause string
     State string // open | awaiting_review | escalated | resolved
-    OpenedAt, SLADueAt time.Time; Resolution, DespachoPenalty *string
-    IdempotencyKey string; CreatedAt, UpdatedAt time.Time
+    OpenedAt, SLADueAt time.Time
+    ReviewExpiresAt, ResolvedAt *time.Time
+    CalendarVersion, IdempotencyKey string
+    // Resolution and DespachoPenalty are populated by the REDECO report / despacho
+    // penalization workflow (issue #9), not by complaint-case creation/review.
+    Resolution, DespachoPenalty *string
+    CreatedAt, UpdatedAt time.Time
 }
-type HumanReview struct { ID, TenantID, EvaluationID, Reviewer, Action, Note string; CreatedAt time.Time } // approve|override
+type HumanReview struct { // approve|override for a complaint case, not an evaluation
+    ID, TenantID, ComplaintCaseID, Decision, Reviewer, Notes string
+    ProcessedAt, SupersededAt *time.Time; CreatedAt, UpdatedAt time.Time
+}
 ```
 
 ## 5. Module specs
@@ -258,8 +266,11 @@ verifies independently. Acceptance: any tamper detectable; export self-verifies.
 (10-business-day SLA + escalation), monthly REDECO report, despacho penalization registry, scheduled
 ledger verification. Hardening contract (ADR-01): explicit `ComplaintCase.State` enum as source of truth,
 idempotency keys (River `UniqueOpts`), exactly-once evidence writes via transaction, HITL pause =
-`awaiting_review` + re-enqueue on `human_reviews` insert (LISTEN/NOTIFY or poll), approval **TTL**.
-Acceptance: SLA timer fires; paused case resumes after human action without losing/duplicating state.
+`awaiting_review` + periodic poll of unprocessed `human_reviews` rows, approval **TTL**. Case creation is
+exposed through `POST /v1/complaints` with a client-supplied idempotency key; review submission is
+`POST /v1/complaints/{id}/reviews` and is accepted only while the case is still `awaiting_review`
+(late submissions return 409 Conflict). Acceptance: SLA timer fires; paused case resumes after human
+action without losing/duplicating state.
 
 ### 5.5 Ingestion (`internal/ingestion`)
 Batch connector (recordings + metadata → `InteractionEvent`). `Transcriber` interface (Whisper default,
