@@ -711,6 +711,29 @@ func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {
 		}
 	}
 
+	var complaintTransition *ledger.ComplaintTransitionEvidence
+	if row.RecordKind == "complaint_transition" {
+		transitionKind := ""
+		if row.TransitionKind != nil {
+			transitionKind = *row.TransitionKind
+		}
+		fromState := ""
+		if row.TransitionFromState != nil {
+			fromState = *row.TransitionFromState
+		}
+		toState := ""
+		if row.TransitionToState != nil {
+			toState = *row.TransitionToState
+		}
+		complaintTransition = &ledger.ComplaintTransitionEvidence{
+			ComplaintCaseID: uuidString(row.ComplaintCaseID),
+			TransitionKind:  transitionKind,
+			FromState:       fromState,
+			ToState:         toState,
+			HumanReviewID:   uuidStringPtr(row.HumanReviewID),
+		}
+	}
+
 	return ledger.EvidenceRecord{
 		ID: uuidString(row.ID),
 		Body: ledger.Body{
@@ -723,6 +746,7 @@ func evidenceRowToRecord(row vigiaDB.EvidenceRecord) ledger.EvidenceRecord {
 			InputsDigest:        row.InputsDigest,
 			CreatedAt:           row.CreatedAt.Time,
 			Judge:               judge,
+			ComplaintTransition: complaintTransition,
 		},
 		PrevHash: row.PrevHash,
 		Hash:     row.Hash,

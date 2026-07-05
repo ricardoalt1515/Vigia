@@ -37,9 +37,11 @@ func main() {
 	os.Exit(run(context.Background(), os.Args[1:], nil, os.Stdout))
 }
 
-// run resolves the -tenant-id flag, verifies the tenant's chain via store
-// (constructing a real Postgres-backed ChainVerifier when store is nil —
-// i.e. only in main()), and writes a human-readable report to out.
+// run resolves the -tenant-id flag, verifies the tenant's mixed-kind evidence
+// chain via store (constructing a real Postgres-backed ChainVerifier when
+// store is nil — i.e. only in main()), and writes a human-readable report to
+// out. Evaluation and complaint-transition records verify through the same
+// hash-chain contract.
 func run(ctx context.Context, args []string, store ChainVerifier, out io.Writer) int {
 	flags := flag.NewFlagSet("ledger-verify", flag.ContinueOnError)
 	flags.SetOutput(out)

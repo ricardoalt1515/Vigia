@@ -203,3 +203,58 @@ func TestChainVerifiesAcrossJudgeShapeChange(t *testing.T) {
 		t.Fatalf("VerifyChain().Count = %d, want 2", result.Count)
 	}
 }
+
+func TestHashGoldenValueUnchangedWithComplaintTransitionFieldAdded(t *testing.T) {
+	const wantHash = "4479342d9bbcc290750de7a01f1986d234884e256bcd30965aaa49f05810384d"
+
+	body := goldenBody()
+	body.ComplaintTransition = nil
+
+	got := ledger.Hash(ledger.GenesisPrevHash, body)
+	if got != wantHash {
+		t.Fatalf("Hash() = %q, want golden %q (unchanged by complaint-transition-absent field)", got, wantHash)
+	}
+}
+
+func TestHashBindsComplaintTransitionFields(t *testing.T) {
+	reviewID := "55555555-5555-5555-5555-555555555555"
+	base := goldenBody()
+	base.InteractionEventID = ""
+	base.EvaluationID = ""
+	base.OverallOutcome = "resolved"
+	base.InputsDigest = ""
+	base.ComplaintTransition = &ledger.ComplaintTransitionEvidence{
+		ComplaintCaseID: "66666666-6666-6666-6666-666666666666",
+		TransitionKind:  "approve",
+		FromState:       "awaiting_review",
+		ToState:         "resolved",
+		HumanReviewID:   &reviewID,
+	}
+	baseHash := ledger.Hash(ledger.GenesisPrevHash, base)
+
+	tests := []struct {
+		name   string
+		mutate func(*ledger.Body)
+	}{
+		{name: "case id", mutate: func(b *ledger.Body) { b.ComplaintTransition.ComplaintCaseID = "77777777-7777-7777-7777-777777777777" }},
+		{name: "transition kind", mutate: func(b *ledger.Body) { b.ComplaintTransition.TransitionKind = "override" }},
+		{name: "from state", mutate: func(b *ledger.Body) { b.ComplaintTransition.FromState = "open" }},
+		{name: "to state", mutate: func(b *ledger.Body) { b.ComplaintTransition.ToState = "escalated" }},
+		{name: "human review id", mutate: func(b *ledger.Body) {
+			other := "88888888-8888-8888-8888-888888888888"
+			b.ComplaintTransition.HumanReviewID = &other
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := base
+			transition := *base.ComplaintTransition
+			changed.ComplaintTransition = &transition
+			tt.mutate(&changed)
+			if ledger.Hash(ledger.GenesisPrevHash, changed) == baseHash {
+				t.Fatalf("Hash() did not change when complaint transition %s changed", tt.name)
+			}
+		})
+	}
+}
