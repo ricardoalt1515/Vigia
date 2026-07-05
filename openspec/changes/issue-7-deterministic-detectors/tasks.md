@@ -78,7 +78,7 @@ Chain strategy: stacked-to-main
 
 ## Phase 4 (PR4): Console Dashboards
 
-- [ ] 4.1 Add `apps/console/src/lib/api.ts` client methods for both endpoints.
-- [ ] 4.2 Create `apps/console/src/app/dashboards/by-despacho/page.tsx` (server-component fetch, mirror interactions page).
-- [ ] 4.3 Create `apps/console/src/app/dashboards/by-cause/page.tsx`.
-- [ ] 4.4 [manual-demo] Verify both pages render seeded demo-tenant data per spec scenarios.
+- [x] 4.1 Add `apps/console/src/lib/api.ts` client methods for both endpoints.
+- [x] 4.2 Create `apps/console/src/app/dashboards/by-despacho/page.tsx` (server-component fetch, mirror interactions page).
+- [x] 4.3 Create `apps/console/src/app/dashboards/by-cause/page.tsx`.
+- [ ] 4.4 [manual-demo] Verify both pages render seeded demo-tenant data per spec scenarios. (Requires a developer running the local dev environment with the migrated + seeded Postgres and API server; not verifiable in this non-interactive apply session. `npx tsc --noEmit` and `npm run build` both pass, confirming both pages compile and are correctly dynamic-rendered.)
