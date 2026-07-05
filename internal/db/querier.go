@@ -92,6 +92,12 @@ type Querier interface {
 	// policy_bundles_one_active_per_tenant_name is non-deferrable.
 	SupersedePolicyBundle(ctx context.Context, arg SupersedePolicyBundleParams) error
 	UpdateChainHead(ctx context.Context, arg UpdateChainHeadParams) error
+	// Idempotent catalog seeding (issue #7 Design Decision "catalog + bundle
+	// seeding idempotency"): policy_rules.code is UNIQUE, so a plain
+	// CreatePolicyRule would fail on re-seed. ON CONFLICT (code) DO UPDATE keeps
+	// a single row per rule code and refreshes title/description/severity to
+	// the current catalog values on every seed run.
+	UpsertPolicyRule(ctx context.Context, arg UpsertPolicyRuleParams) (PolicyRule, error)
 }
 
 var _ Querier = (*Queries)(nil)

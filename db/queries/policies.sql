@@ -3,6 +3,20 @@ INSERT INTO policy_rules (code, title, description, severity)
 VALUES ($1, $2, $3, $4)
 RETURNING id, code, title, description, severity, created_at;
 
+-- name: UpsertPolicyRule :one
+-- Idempotent catalog seeding (issue #7 Design Decision "catalog + bundle
+-- seeding idempotency"): policy_rules.code is UNIQUE, so a plain
+-- CreatePolicyRule would fail on re-seed. ON CONFLICT (code) DO UPDATE keeps
+-- a single row per rule code and refreshes title/description/severity to
+-- the current catalog values on every seed run.
+INSERT INTO policy_rules (code, title, description, severity)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (code) DO UPDATE SET
+    title = EXCLUDED.title,
+    description = EXCLUDED.description,
+    severity = EXCLUDED.severity
+RETURNING id, code, title, description, severity, created_at;
+
 -- name: CreatePolicyBundle :one
 INSERT INTO policy_bundles (tenant_id, name, version, status)
 VALUES ($1, $2, $3, $4)
