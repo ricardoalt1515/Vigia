@@ -28,7 +28,10 @@ returning `(outcome, rationale)` with no I/O. The evaluation window MUST be the
 half-open interval `[08:00:00, 21:00:00)` in debtor-local wall-clock time,
 derived from the IANA zone snapshotted on the interaction. Missing or invalid
 timezone data MUST fail closed to `BLOCK` with an explicit rationale rather
-than passing or defaulting.
+than passing or defaulting. Its `NamedDetector.Code` registration string MUST
+be `"MX-REDECO-04"`, replacing the prior `"contact-hours"` wiring string.
+(Previously: `Code` was the ad hoc string `"contact-hours"`; this delta
+standardizes it to the REDECO rule code with no change to detection logic.)
 
 ### Scenario: Interaction at exactly 08:00:00 local time passes `[unit]`
 
@@ -112,6 +115,23 @@ than passing or defaulting.
   window bounds as arguments
 - AND it MUST NOT perform database queries, network calls, clock reads via
   `time.Now()`, or any other side effect.
+
+### Scenario: Registration code uses the REDECO rule code `[unit]`
+
+- GIVEN the `Detectors` slice is constructed in `cmd/api/main.go` and
+  `cmd/seed/main.go`
+- WHEN `ContactHoursDetector`'s `NamedDetector.Code` is inspected
+- THEN it MUST equal `"MX-REDECO-04"`
+- AND the rename scope is: production wiring (`cmd/api/main.go`,
+  `cmd/seed/main.go`) plus ANY test that wires or asserts on the real
+  `ContactHoursDetector`'s registration code — explicitly including
+  `cmd/seed/devdata_integration_test.go`, which wires the real
+  `ContactHoursDetector` with code `"contact-hours"` and persists rows to
+  Postgres — all of which MUST NOT still use the string `"contact-hours"`
+- AND unrelated tests that use the literal string `"contact-hours"` only as
+  an arbitrary fixture label for a fake/stub detector (not the real
+  `ContactHoursDetector`) are explicitly OUT OF SCOPE for this rename and MAY
+  keep that label unchanged.
 
 ---
 

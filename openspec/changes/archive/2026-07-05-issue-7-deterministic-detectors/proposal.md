@@ -200,18 +200,18 @@ since the dashboards aggregate over detector output.
 
 ## Success Criteria
 
-- [ ] Four of the five prohibited cases (third-party contact, protected
+- [x] Four of the five prohibited cases (third-party contact, protected
       population, authorized channel, payment routing) HARD-BLOCK with
       table-driven tests + a `TestXNoIO` purity proof per detector; the
       fifth (disclosure presence, `MX-REDECO-03`) emits `warn` per its
       WARN-level catalog action, also with table-driven tests + a `TestXNoIO`
       purity proof.
-- [ ] All five new rules are seeded as `policy_rules` + active
+- [x] All five new rules are seeded as `policy_rules` + active
       `policy_bundle_rules` snapshot (versioned bundle), via a single seeding path
       that also covers MX-REDECO-04/05.
-- [ ] `NamedDetector.Code` uses REDECO rule codes consistently (including the
+- [x] `NamedDetector.Code` uses REDECO rule codes consistently (including the
       renamed contact-hours detector).
-- [ ] By-despacho dashboard ranks despachos by violation rate (1 tenant : N
+- [x] By-despacho dashboard ranks despachos by violation rate (1 tenant : N
       despachos).
-- [ ] By-REDECO-cause breakdown available per tenant.
-- [ ] Golden-eval gate and LLM-judge pipeline remain green/unchanged.
+- [x] By-REDECO-cause breakdown available per tenant.
+- [x] Golden-eval gate and LLM-judge pipeline remain green/unchanged.
