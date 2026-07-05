@@ -87,6 +87,37 @@ func interactionAttributedTo(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	seedDetectorResultRow(t, ctx, pool, tenantID, interactionID, detectorCode, outcome)
 }
 
+// detectorRow is one (rule code, outcome) pair to seed onto a single
+// interaction via interactionWithDetectorRows.
+type detectorRow struct {
+	code    string
+	outcome string
+}
+
+// interactionWithDetectorRows seeds ONE evaluated interaction attributed to
+// despachoID (nil for unattributed) carrying MULTIPLE detector_result_rows
+// children, one per entry in rows. This is the fixture shape the
+// interaction-grain invariant actually depends on: a single interaction can
+// legitimately produce up to 7 detector rows (one per rule), so
+// total/violations MUST be counted as COUNT(DISTINCT interaction_events.id),
+// never COUNT(detector_result_rows.*) or any other row-grain count that
+// would silently inflate a single interaction into multiple "violations".
+func interactionWithDetectorRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID, debtorID string, despachoID *string, transcriptRef string, rows []detectorRow) {
+	t.Helper()
+	var interactionID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO interaction_events (tenant_id, debtor_id, channel, direction, status, occurred_at, transcript_ref, debtor_timezone, despacho_id)
+		VALUES ($1, $2, 'phone', 'outbound', 'recorded', now(), $3, 'America/Mexico_City', $4)
+		RETURNING id
+	`, tenantID, debtorID, transcriptRef, despachoID).Scan(&interactionID); err != nil {
+		t.Fatalf("create interaction: %v", err)
+	}
+	seedEvaluation(t, ctx, pool, tenantID, interactionID)
+	for _, row := range rows {
+		seedDetectorResultRow(t, ctx, pool, tenantID, interactionID, row.code, row.outcome)
+	}
+}
+
 func floatsClose(a, b float64) bool {
 	return math.Abs(a-b) < 1e-9
 }
@@ -230,6 +261,85 @@ func TestDashboardByDespachoRLSIsolation(t *testing.T) {
 	}
 	if ratesA[0].DespachoID == nil || *ratesA[0].DespachoID != despachoA {
 		t.Fatalf("tenant A rates[0] = %#v, want despachoA", ratesA[0])
+	}
+}
+
+// TestDashboardInteractionGrainNotRowGrain pins the interaction-grain
+// invariant both by-despacho and by-cause depend on (judgment-day
+// fast-follow: a future rewrite to a row-grain count, e.g. COUNT(*) over
+// joined detector_result_rows, must fail this test). It seeds ONE
+// interaction carrying FOUR detector_result_rows children — two 'fail' rows
+// on different rule codes, one 'pass' row, and one 'warn' row — and asserts:
+//   - by-despacho: total=1, violations=1 (NOT 2, even though there are two
+//     'fail' rows on this one interaction) for the owning despacho.
+//   - by-cause: each of the two failing rule codes counts exactly 1
+//     violation (never fanned out by the interaction's other rows), the
+//     passing rule code counts 0, and the warn rule code counts 0
+//     violations / 1 warning.
+func TestDashboardInteractionGrainNotRowGrain(t *testing.T) {
+	databaseURL := requireDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+	appPool := requireAppPool(t, ctx)
+
+	tenantID, debtorID := seedTenantAndDebtor(t, ctx, pool, "dash-interaction-grain")
+	despachoID := seedDespacho(t, ctx, pool, tenantID, "dash-interaction-grain/despacho")
+
+	interactionWithDetectorRows(t, ctx, pool, tenantID, debtorID, &despachoID, "dash-interaction-grain/multi-row", []detectorRow{
+		{code: "MX-REDECO-04", outcome: "fail"},
+		{code: "MX-REDECO-06", outcome: "fail"},
+		{code: "MX-REDECO-10", outcome: "pass"},
+		{code: "MX-REDECO-03", outcome: "warn"},
+	})
+
+	reader := postgres.NewDashboardReaderFromPool(appPool)
+
+	rates, err := reader.ByDespacho(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("ByDespacho: %v", err)
+	}
+	if len(rates) != 1 {
+		t.Fatalf("rates len = %d, want 1", len(rates))
+	}
+	got := rates[0]
+	if got.DespachoID == nil || *got.DespachoID != despachoID {
+		t.Fatalf("rates[0] despacho = %#v, want %s", got, despachoID)
+	}
+	if got.Total != 1 {
+		t.Fatalf("Total = %d, want 1 (one interaction, regardless of how many detector rows it produced)", got.Total)
+	}
+	if got.Violations != 1 {
+		t.Fatalf("Violations = %d, want 1 (interaction-grain: one interaction with 2 fail rows is still ONE violating interaction, never 2)", got.Violations)
+	}
+	if !floatsClose(got.ViolationRate, 1.0) {
+		t.Fatalf("ViolationRate = %v, want 1.0", got.ViolationRate)
+	}
+
+	counts, err := reader.ByCause(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("ByCause: %v", err)
+	}
+	byCode := make(map[string]struct{ violations, warnings int64 })
+	for _, c := range counts {
+		byCode[c.RuleCode] = struct{ violations, warnings int64 }{c.Violations, c.Warnings}
+	}
+	if got := byCode["MX-REDECO-04"]; got.violations != 1 {
+		t.Fatalf("MX-REDECO-04 violations = %d, want 1 (must not be fanned out by the interaction's other detector rows)", got.violations)
+	}
+	if got := byCode["MX-REDECO-06"]; got.violations != 1 {
+		t.Fatalf("MX-REDECO-06 violations = %d, want 1", got.violations)
+	}
+	if got := byCode["MX-REDECO-10"]; got.violations != 0 {
+		t.Fatalf("MX-REDECO-10 (pass outcome) violations = %d, want 0", got.violations)
+	}
+	if got := byCode["MX-REDECO-03"]; got.violations != 0 || got.warnings != 1 {
+		t.Fatalf("MX-REDECO-03 = %+v, want violations=0 warnings=1", got)
 	}
 }
 

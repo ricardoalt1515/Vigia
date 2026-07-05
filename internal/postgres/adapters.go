@@ -486,6 +486,13 @@ func (r *DashboardReader) ByDespacho(ctx context.Context, tenantID string) ([]ht
 		}
 		items = make([]httpapi.DespachoRate, 0, len(rows))
 		for _, row := range rows {
+			// ViolationRate is a display-only float derived here from the two
+			// already SQL-aggregated int64 counts (avoids pgtype.Numeric
+			// parsing for a value that is never itself compared or sorted in
+			// Go). The ranking order returned by DashboardByDespacho's SQL
+			// ORDER BY (violations::numeric / NULLIF(total, 0)) DESC, plus its
+			// despacho_name tie-break, is authoritative and is never
+			// re-sorted here.
 			var rate float64
 			if row.Total > 0 {
 				rate = float64(row.Violations) / float64(row.Total)
