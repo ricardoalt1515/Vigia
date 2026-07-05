@@ -22,6 +22,7 @@ var tenantScopedTables = []string{
 	"evidence_records",
 	"ledger_chain_heads",
 	"interaction_transcripts",
+	"despachos",
 }
 
 func TestMigrationPreservesTenantScopedParentChildIntegrity(t *testing.T) {
@@ -331,6 +332,7 @@ func TestRestrictedAppRoleIsLeastPrivilege(t *testing.T) {
 		"interaction_transcripts",
 		"policy_bundles",
 		"policy_bundle_rules",
+		"despachos",
 	} {
 		t.Run(table, func(t *testing.T) {
 			var canSelect bool

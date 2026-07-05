@@ -17,6 +17,7 @@ type Querier interface {
 	CountBundleVersions(ctx context.Context, arg CountBundleVersionsParams) (int64, error)
 	CountOutOfHoursEvaluations(ctx context.Context) (int64, error)
 	CreateDebtor(ctx context.Context, arg CreateDebtorParams) (CreateDebtorRow, error)
+	CreateDespacho(ctx context.Context, arg CreateDespachoParams) (Despacho, error)
 	CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (CreateDetectorResultRowRow, error)
 	CreateEvaluation(ctx context.Context, arg CreateEvaluationParams) (Evaluation, error)
 	CreateInteractionEvent(ctx context.Context, arg CreateInteractionEventParams) (CreateInteractionEventRow, error)
@@ -32,6 +33,7 @@ type Querier interface {
 	// silently picking one; that constraint is out of scope for issue #6.
 	GetActiveBundleByTenant(ctx context.Context, tenantID pgtype.UUID) (PolicyBundle, error)
 	GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantParams) (GetDebtorByTenantRow, error)
+	GetDespachoByTenant(ctx context.Context, arg GetDespachoByTenantParams) (Despacho, error)
 	// Used by cmd/seed to detect whether a pre-existing (re-run) interaction
 	// still needs to be backfilled with an evaluation.
 	GetEvaluationByInteractionEventID(ctx context.Context, arg GetEvaluationByInteractionEventIDParams) (Evaluation, error)
@@ -58,6 +60,7 @@ type Querier interface {
 	// detector/judge result never fans out the interaction row.
 	ListCurrentTenantInteractionsWithOutcome(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsWithOutcomeRow, error)
 	ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDebtorsByTenantRow, error)
+	ListDespachosByTenant(ctx context.Context, tenantID pgtype.UUID) ([]Despacho, error)
 	// Package detector layer for evidence export, sorted by detector_code.
 	ListDetectorResultRowsByEvaluation(ctx context.Context, evaluationID pgtype.UUID) ([]ListDetectorResultRowsByEvaluationRow, error)
 	ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDetectorResultRowsByTenantRow, error)
