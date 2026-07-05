@@ -55,18 +55,19 @@ func run(ctx context.Context) error {
 
 	// reevaluator reruns the same wired detectors/judge ReEvaluateInteraction
 	// promises to be reproducible against (issue #6): it MUST mirror
-	// cmd/seed's production wiring (contact-hours detector, MX-REDECO-05
-	// judge) so a rerun genuinely proves reproducibility of the real
-	// pipeline, not a stand-in.
+	// cmd/seed's production wiring (MX-REDECO-04 contact-hours detector,
+	// MX-REDECO-05 judge) so a rerun genuinely proves reproducibility of the
+	// real pipeline, not a stand-in.
 	reevaluator := evaluation.Service{
 		Detectors: []evaluation.NamedDetector{
-			{Code: "contact-hours", Detector: detection.ContactHoursDetector{
+			{Code: "MX-REDECO-04", Detector: detection.ContactHoursDetector{
 				Window: detection.Window{StartHour: 8, EndHour: 21},
 			}},
 			{Code: "MX-REDECO-06", Detector: detection.ThirdPartyContactDetector{}},
 			{Code: "MX-REDECO-07", Detector: detection.ProtectedPopulationDetector{}, RequiresHITL: true},
 			{Code: "MX-REDECO-11", Detector: detection.AuthorizedChannelDetector{}},
 			{Code: "MX-REDECO-10", Detector: detection.PaymentRoutingDetector{}},
+			{Code: "MX-REDECO-03", Detector: detection.DisclosureDetector{}},
 		},
 		Judges: []evaluation.NamedJudge{
 			{Code: "MX-REDECO-05", Judge: buildJudge(cfg)},

@@ -261,13 +261,13 @@ func TestSeedDevData(t *testing.T) {
 		if got := q.countMethodCalls("CreateDebtor"); got != 1 {
 			t.Errorf("CreateDebtor calls = %d, want 1", got)
 		}
-		// Exactly ten CreateInteractionEvent calls (three original fixtures,
-		// the out-of-hours demo fixture, the threatening + neutral
-		// transcript fixtures (issue #4), and the four issue #7 new-detector
+		// Exactly eleven CreateInteractionEvent calls (three original
+		// fixtures, the out-of-hours demo fixture, the threatening + neutral
+		// transcript fixtures (issue #4), and the five issue #7 new-detector
 		// demo fixtures: third-party, protected-minor, unauthorized-channel,
-		// payment-routing).
-		if got := q.countMethodCalls("CreateInteractionEvent"); got != 10 {
-			t.Errorf("CreateInteractionEvent calls = %d, want 10", got)
+		// payment-routing, disclosure-warn).
+		if got := q.countMethodCalls("CreateInteractionEvent"); got != 11 {
+			t.Errorf("CreateInteractionEvent calls = %d, want 11", got)
 		}
 		// Exactly two CreateInteractionTranscript calls (threatening + neutral)
 		if got := q.countMethodCalls("CreateInteractionTranscript"); got != 2 {
@@ -290,8 +290,8 @@ func TestSeedDevData(t *testing.T) {
 		if result.DebtorID == "" {
 			t.Error("DebtorID should be set in result")
 		}
-		if len(result.InteractionIDs) != 10 {
-			t.Errorf("InteractionIDs = %d, want 10", len(result.InteractionIDs))
+		if len(result.InteractionIDs) != 11 {
+			t.Errorf("InteractionIDs = %d, want 11", len(result.InteractionIDs))
 		}
 		if result.PlaintextKey == "" {
 			t.Error("PlaintextKey should be set in result")
@@ -303,13 +303,13 @@ func TestSeedDevData(t *testing.T) {
 		if !result.Created.DebtorCreated {
 			t.Error("Created.DebtorCreated should be true")
 		}
-		if result.Created.InteractionsCreated != 10 {
-			t.Errorf("Created.InteractionsCreated = %d, want 10", result.Created.InteractionsCreated)
+		if result.Created.InteractionsCreated != 11 {
+			t.Errorf("Created.InteractionsCreated = %d, want 11", result.Created.InteractionsCreated)
 		}
 		// Every newly created interaction is evaluated exactly once, with the
 		// debtor's snapshotted timezone (never empty/UTC-defaulted).
-		if len(evaluator.calls) != 10 {
-			t.Fatalf("Evaluator calls = %d, want 10", len(evaluator.calls))
+		if len(evaluator.calls) != 11 {
+			t.Fatalf("Evaluator calls = %d, want 11", len(evaluator.calls))
 		}
 		for _, c := range evaluator.calls {
 			if c.tenantID != result.TenantID {
@@ -334,12 +334,14 @@ func TestSeedDevData(t *testing.T) {
 		ref7 := "seed/demo/call-06-protected-minor"
 		ref8 := "seed/demo/call-07-unauthorized-channel"
 		ref9 := "seed/demo/message-08-payment-routing"
+		ref10 := "seed/demo/call-09-disclosure-warn"
 		id4 := pgtype.UUID{Bytes: [16]byte{35}, Valid: true}
 		id5 := pgtype.UUID{Bytes: [16]byte{36}, Valid: true}
 		id6 := pgtype.UUID{Bytes: [16]byte{37}, Valid: true}
 		id7 := pgtype.UUID{Bytes: [16]byte{38}, Valid: true}
 		id8 := pgtype.UUID{Bytes: [16]byte{39}, Valid: true}
 		id9 := pgtype.UUID{Bytes: [16]byte{40}, Valid: true}
+		id10 := pgtype.UUID{Bytes: [16]byte{41}, Valid: true}
 
 		q := &fakeSeedQuerier{
 			tenantBySlug: map[string]vigiaDB.Tenant{
@@ -359,18 +361,20 @@ func TestSeedDevData(t *testing.T) {
 				{ID: id7, TranscriptRef: &ref7},
 				{ID: id8, TranscriptRef: &ref8},
 				{ID: id9, TranscriptRef: &ref9},
+				{ID: id10, TranscriptRef: &ref10},
 			},
 			existingEvaluationsByInteractionID: map[string]bool{
 				uuidToString(pgtype.UUID{Bytes: [16]byte{31}, Valid: true}): true,
 				uuidToString(pgtype.UUID{Bytes: [16]byte{32}, Valid: true}): true,
 				uuidToString(pgtype.UUID{Bytes: [16]byte{33}, Valid: true}): true,
 				uuidToString(pgtype.UUID{Bytes: [16]byte{34}, Valid: true}): true,
-				uuidToString(id4): true,
-				uuidToString(id5): true,
-				uuidToString(id6): true,
-				uuidToString(id7): true,
-				uuidToString(id8): true,
-				uuidToString(id9): true,
+				uuidToString(id4):  true,
+				uuidToString(id5):  true,
+				uuidToString(id6):  true,
+				uuidToString(id7):  true,
+				uuidToString(id8):  true,
+				uuidToString(id9):  true,
+				uuidToString(id10): true,
 			},
 			existingTranscriptsByInteractionID: map[string]vigiaDB.InteractionTranscript{
 				uuidToString(id4): {InteractionEventID: id4, Utterances: []byte(`[]`)},
@@ -422,7 +426,7 @@ func TestSeedDevData(t *testing.T) {
 	t.Run("partial_state_missing_interactions", func(t *testing.T) {
 		existingTenantID := pgtype.UUID{Bytes: [16]byte{10}, Valid: true}
 		existingDebtorID := pgtype.UUID{Bytes: [16]byte{20}, Valid: true}
-		// Only the first interaction exists; nine are missing.
+		// Only the first interaction exists; ten are missing.
 		ref0 := "seed/demo/call-01"
 
 		q := &fakeSeedQuerier{
@@ -457,18 +461,18 @@ func TestSeedDevData(t *testing.T) {
 		if got := q.countMethodCalls("CreateDebtor"); got != 0 {
 			t.Errorf("CreateDebtor calls = %d, want 0", got)
 		}
-		// Only the nine missing interactions should be created
-		if got := q.countMethodCalls("CreateInteractionEvent"); got != 9 {
-			t.Errorf("CreateInteractionEvent calls = %d, want 9 (missing ones only)", got)
+		// Only the ten missing interactions should be created
+		if got := q.countMethodCalls("CreateInteractionEvent"); got != 10 {
+			t.Errorf("CreateInteractionEvent calls = %d, want 10 (missing ones only)", got)
 		}
 		if issuer.calls != 1 {
 			t.Errorf("KeyIssuer calls = %d, want 1", issuer.calls)
 		}
-		if result.Created.InteractionsCreated != 9 {
-			t.Errorf("Created.InteractionsCreated = %d, want 9", result.Created.InteractionsCreated)
+		if result.Created.InteractionsCreated != 10 {
+			t.Errorf("Created.InteractionsCreated = %d, want 10", result.Created.InteractionsCreated)
 		}
-		if len(evaluator.calls) != 9 {
-			t.Errorf("Evaluator calls = %d, want 9 (only newly created interactions)", len(evaluator.calls))
+		if len(evaluator.calls) != 10 {
+			t.Errorf("Evaluator calls = %d, want 10 (only newly created interactions)", len(evaluator.calls))
 		}
 
 		// Verify the created interactions have the correct transcript_refs
@@ -486,6 +490,7 @@ func TestSeedDevData(t *testing.T) {
 			"seed/demo/call-03-threatening", "seed/demo/call-04-neutral",
 			"seed/demo/call-05-third-party", "seed/demo/call-06-protected-minor",
 			"seed/demo/call-07-unauthorized-channel", "seed/demo/message-08-payment-routing",
+			"seed/demo/call-09-disclosure-warn",
 		}
 		for _, want := range wantRefs {
 			found := false
@@ -514,6 +519,7 @@ func TestSeedDevData(t *testing.T) {
 		ref7 := "seed/demo/call-06-protected-minor"
 		ref8 := "seed/demo/call-07-unauthorized-channel"
 		ref9 := "seed/demo/message-08-payment-routing"
+		ref10 := "seed/demo/call-09-disclosure-warn"
 		id0 := pgtype.UUID{Bytes: [16]byte{31}, Valid: true}
 		id1 := pgtype.UUID{Bytes: [16]byte{32}, Valid: true}
 		id2 := pgtype.UUID{Bytes: [16]byte{33}, Valid: true}
@@ -524,6 +530,7 @@ func TestSeedDevData(t *testing.T) {
 		id7 := pgtype.UUID{Bytes: [16]byte{38}, Valid: true}
 		id8 := pgtype.UUID{Bytes: [16]byte{39}, Valid: true}
 		id9 := pgtype.UUID{Bytes: [16]byte{40}, Valid: true}
+		id10 := pgtype.UUID{Bytes: [16]byte{41}, Valid: true}
 
 		q := &fakeSeedQuerier{
 			tenantBySlug: map[string]vigiaDB.Tenant{
@@ -543,22 +550,24 @@ func TestSeedDevData(t *testing.T) {
 				{ID: id7, TranscriptRef: &ref7},
 				{ID: id8, TranscriptRef: &ref8},
 				{ID: id9, TranscriptRef: &ref9},
+				{ID: id10, TranscriptRef: &ref10},
 			},
 			// Only two of the six original-scope pre-existing interactions
 			// already have an evaluation row; the other two of the original
 			// four must be backfilled on this run. The threatening/neutral
-			// fixtures and all four issue #7 new-detector demo fixtures
+			// fixtures and all five issue #7 new-detector demo fixtures
 			// already have evaluations (+transcripts for the former), so this
 			// test stays scoped to the original-four backfill scenario.
 			existingEvaluationsByInteractionID: map[string]bool{
-				uuidToString(id0): true,
-				uuidToString(id1): true,
-				uuidToString(id4): true,
-				uuidToString(id5): true,
-				uuidToString(id6): true,
-				uuidToString(id7): true,
-				uuidToString(id8): true,
-				uuidToString(id9): true,
+				uuidToString(id0):  true,
+				uuidToString(id1):  true,
+				uuidToString(id4):  true,
+				uuidToString(id5):  true,
+				uuidToString(id6):  true,
+				uuidToString(id7):  true,
+				uuidToString(id8):  true,
+				uuidToString(id9):  true,
+				uuidToString(id10): true,
 			},
 			existingTranscriptsByInteractionID: map[string]vigiaDB.InteractionTranscript{
 				uuidToString(id4): {InteractionEventID: id4, Utterances: []byte(`[]`)},

@@ -209,9 +209,15 @@ func devDataFixtures(now time.Time, debtorLoc *time.Location) []interactionFixtu
 	)
 	// MX-REDECO-06 violation demo: contacted party is not the debtor and
 	// not an authorized third party. Every other detector input stays
-	// compliant so this interaction's BLOCK is attributable to the
-	// third-party-contact detector alone.
+	// compliant except disclosureProvided (see below), so this
+	// interaction's BLOCK is attributable to the third-party-contact
+	// detector alone.
 	thirdPartyDemo.contactPartyRelationship = "third_party"
+	// Also emits a coexisting MX-REDECO-03 warn (disclosure not stated),
+	// demonstrating that a warn row coexisting with a hard-block row still
+	// yields overall fail, driven by the block (spec "A warn row coexisting
+	// with a hard-block row yields overall fail").
+	thirdPartyDemo.disclosureProvided = boolPtr(false)
 
 	protectedMinorDemo := compliantFixture(
 		string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
@@ -243,6 +249,17 @@ func devDataFixtures(now time.Time, debtorLoc *time.Location) []interactionFixtu
 	// recipient, isolating the BLOCK to the payment-routing detector.
 	paymentRoutingDemo.paymentRecipient = "collector"
 
+	disclosureWarnDemo := compliantFixture(
+		string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
+		"seed/demo/call-09-disclosure-warn", now.Add(-15*time.Minute), nil,
+	)
+	// MX-REDECO-03 warn-only demo: the required UNE/complaints-unit
+	// disclosure was not stated, but every hard-block detector input stays
+	// compliant, so this interaction's evaluation stays overall PASS with a
+	// single warn/medium detector_result_rows entry (spec "A warn-only
+	// interaction evaluation stays overall pass").
+	disclosureWarnDemo.disclosureProvided = boolPtr(false)
+
 	return []interactionFixture{
 		compliantFixture(
 			string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
@@ -272,6 +289,7 @@ func devDataFixtures(now time.Time, debtorLoc *time.Location) []interactionFixtu
 		protectedMinorDemo,
 		unauthorizedChannelDemo,
 		paymentRoutingDemo,
+		disclosureWarnDemo,
 	}
 }
 
