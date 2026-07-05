@@ -26,7 +26,7 @@ const canonicalTimeLayout = "2006-01-02T15:04:05.000000Z07:00"
 // DetectorResult is one detector's contribution to inputs_digest.
 type DetectorResult struct {
 	Code      string
-	Outcome   string // core.DetectorOutcome value, e.g. "pass" | "fail"
+	Outcome   string // core.DetectorOutcome value: "pass" | "warn" | "review" | "fail"
 	Severity  string
 	Rationale string
 }

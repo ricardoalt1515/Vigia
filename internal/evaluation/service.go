@@ -7,6 +7,7 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/ricardoalt1515/vigia/internal/core"
@@ -34,6 +35,15 @@ var ErrMultipleJudgesNotSupported = errors.New("evaluation: multiple judges conf
 type NamedDetector struct {
 	Code     string
 	Detector detection.Detector
+
+	// RequiresHITL marks a detector whose catalog action mandates human
+	// review on a block (e.g. MX-REDECO-07's "HARD BLOCK + HITL" per
+	// docs/regulatory-ruleset.md:38). true is OR'd into the evaluation's
+	// requires_hitl only when THIS detector blocks; it is never set by any
+	// other detector's outcome and is never unset by this detector passing.
+	// The zero value (false) reproduces today's behavior for every other
+	// detector: a hard block alone does not require human review.
+	RequiresHITL bool
 }
 
 // DetectorResultInput is one detector's persisted result, already mapped
@@ -238,30 +248,60 @@ type detectorJudgeRun struct {
 func (s Service) runDetectorsAndJudges(ctx context.Context, interaction detection.Interaction, utterances []judge.Utterance) detectorJudgeRun {
 	overallOutcome := "pass"
 	results := make([]DetectorResultInput, 0, len(s.Detectors)+len(s.Judges))
+	requiresHITL := false
 
 	for _, nd := range s.Detectors {
 		res := nd.Detector.Evaluate(interaction)
 
+		// Explicit branch on detection.Outcome (block/warn/pass), plus a
+		// fail-closed default — see design.md's "MX-REDECO-03 is warn-level"
+		// decision: a binary if(block)/else would silently collapse any
+		// future non-block, non-pass outcome into pass/low. Each recognized
+		// case below sets its own outcome/severity and its own effect (or
+		// lack of effect) on overallOutcome/requiresHITL, so adding a new
+		// detection.Outcome value in the future MUST be handled here
+		// explicitly, not left to fall through. default is intentionally
+		// fail-closed (never fail-open): an unrecognized outcome value can
+		// only reach here via a bug or an unwired future detection.Outcome,
+		// and silently treating that as a pass would hide the gap instead of
+		// surfacing it.
 		var outcome core.DetectorOutcome
 		var severity core.Severity
-		if res.Outcome == detection.OutcomeBlock {
+		rationale := res.Rationale
+		switch res.Outcome {
+		case detection.OutcomeBlock:
 			outcome = core.DetectorOutcomeFail
 			severity = core.SeverityHigh
 			overallOutcome = "fail"
-		} else {
+			if nd.RequiresHITL {
+				requiresHITL = true
+			}
+		case detection.OutcomeWarn:
+			outcome = core.DetectorOutcomeWarn
+			severity = core.SeverityMedium
+			// A warn row alone never flips overallOutcome or requiresHITL.
+		case detection.OutcomePass:
 			outcome = core.DetectorOutcomePass
 			severity = core.SeverityLow
+		default:
+			outcome = core.DetectorOutcomeFail
+			severity = core.SeverityHigh
+			overallOutcome = "fail"
+			rationale = fmt.Sprintf("fail-closed: detector %q returned an unrecognized outcome %q: %s", nd.Code, res.Outcome, res.Rationale)
+			s.logger().Error("evaluation.unrecognized_detector_outcome",
+				"detector_code", nd.Code,
+				"outcome", string(res.Outcome),
+			)
 		}
 
 		results = append(results, DetectorResultInput{
 			DetectorCode: nd.Code,
 			Outcome:      outcome,
 			Severity:     severity,
-			Rationale:    res.Rationale,
+			Rationale:    rationale,
 		})
 	}
 
-	requiresHITL := false
 	var judgeModelID, rubricVersion string
 	var judgeConfidence *float64
 
