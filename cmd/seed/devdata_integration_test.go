@@ -251,6 +251,20 @@ func TestSeedDevDataIntegration(t *testing.T) {
 		}
 	}
 
+	// The compliant fixture's OccurredAt is pinned inside the debtor-local
+	// contact-hours window (fixtureInstant, judgment-day round 1 fix), so
+	// its overall evaluation is now deterministically `pass` regardless of
+	// when this test actually runs.
+	var compliantOverallOutcome string
+	if err := pool.QueryRow(ctx, `
+		SELECT overall_outcome FROM evaluations WHERE interaction_event_id = $1
+	`, compliantID).Scan(&compliantOverallOutcome); err != nil {
+		t.Fatalf("read compliant interaction evaluation: %v", err)
+	}
+	if compliantOverallOutcome != "pass" {
+		t.Errorf("compliant interaction overall_outcome = %q, want pass", compliantOverallOutcome)
+	}
+
 	// (b) Each violation-demo fixture BLOCKs (persisted as "fail") on
 	// exactly the detector it targets.
 	if got := detectorOutcome(t, thirdPartyID, "MX-REDECO-06"); got != "fail" {
@@ -267,26 +281,49 @@ func TestSeedDevDataIntegration(t *testing.T) {
 	}
 
 	// (d) Issue #7 (MX-REDECO-03, warn-level): the disclosure-warn demo
-	// fixture emits a `warn` (not `fail`) detector_result_rows entry. The
-	// end-to-end "warn-only stays overall pass" / "warn+block coexists as
-	// overall fail" guarantees are already proven deterministically at the
-	// Service level (internal/evaluation/service_test.go, PR2a) with a fake
-	// EvaluationStore — mirroring the MX-REDECO-07 HITL precedent (2a.9) —
-	// so this fixture-based check intentionally stays scoped to the
-	// detector-row outcome only, since this fixture's overall_outcome also
-	// depends on the wall-clock-relative contact-hours detector and would be
-	// flaky if asserted here.
-	if got := detectorOutcome(t, disclosureWarnID, "MX-REDECO-03"); got != "warn" {
-		t.Errorf("disclosure-warn demo fixture MX-REDECO-03 outcome = %q, want warn", got)
+	// fixture — every hard-block detector input compliant, disclosure not
+	// stated, and OccurredAt pinned inside the contact-hours window
+	// (fixtureInstant, judgment-day round 1 fix) — proves the "warn-only
+	// interaction evaluation stays overall pass" spec scenario end to end
+	// against real Postgres: its MX-REDECO-03 detector_result_rows row is
+	// `warn`/`medium`, requires_hitl stays false (only MX-REDECO-07 sets
+	// it), and the evaluation's overall_outcome is deterministically
+	// `pass`. This complements (does not replace) the equivalent
+	// Service-level unit tests in internal/evaluation/service_test.go
+	// (PR2a) that prove the same fold logic with a fake EvaluationStore.
+	var disclosureWarnOutcome, disclosureWarnSeverity string
+	var disclosureWarnHITL bool
+	if err := pool.QueryRow(ctx, `
+		SELECT dr.outcome, dr.severity
+		FROM detector_result_rows dr
+		JOIN evaluations e ON e.id = dr.evaluation_id
+		WHERE e.interaction_event_id = $1 AND dr.detector_code = 'MX-REDECO-03'
+	`, disclosureWarnID).Scan(&disclosureWarnOutcome, &disclosureWarnSeverity); err != nil {
+		t.Fatalf("read disclosure-warn MX-REDECO-03 detector row: %v", err)
+	}
+	if disclosureWarnOutcome != "warn" {
+		t.Errorf("disclosure-warn demo fixture MX-REDECO-03 outcome = %q, want warn", disclosureWarnOutcome)
+	}
+	if disclosureWarnSeverity != "medium" {
+		t.Errorf("disclosure-warn demo fixture MX-REDECO-03 severity = %q, want medium", disclosureWarnSeverity)
+	}
+	var disclosureWarnOverallOutcome string
+	if err := pool.QueryRow(ctx, `
+		SELECT overall_outcome, requires_hitl FROM evaluations WHERE interaction_event_id = $1
+	`, disclosureWarnID).Scan(&disclosureWarnOverallOutcome, &disclosureWarnHITL); err != nil {
+		t.Fatalf("read disclosure-warn interaction evaluation: %v", err)
+	}
+	if disclosureWarnOverallOutcome != "pass" {
+		t.Errorf("disclosure-warn interaction overall_outcome = %q, want pass (a warn row alone must not flip overall outcome)", disclosureWarnOverallOutcome)
+	}
+	if disclosureWarnHITL {
+		t.Error("disclosure-warn interaction requires_hitl = true, want false")
 	}
 
 	// The third-party demo fixture also emits a coexisting MX-REDECO-03
 	// warn (disclosure not stated), proving a warn row coexisting with a
 	// hard-block row still yields overall fail, driven by the block (spec
 	// "A warn row coexisting with a hard-block row yields overall fail").
-	// Unlike the pass-path assertion above, this fail assertion is safe from
-	// wall-clock flakiness: ANY detector block forces overall fail
-	// regardless of what the other detectors (including contact-hours) do.
 	if got := detectorOutcome(t, thirdPartyID, "MX-REDECO-03"); got != "warn" {
 		t.Errorf("third-party demo fixture MX-REDECO-03 outcome = %q, want warn", got)
 	}
