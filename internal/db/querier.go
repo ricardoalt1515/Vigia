@@ -16,10 +16,15 @@ type Querier interface {
 	// bundle name, not globally per tenant.
 	CountBundleVersions(ctx context.Context, arg CountBundleVersionsParams) (int64, error)
 	CountOutOfHoursEvaluations(ctx context.Context) (int64, error)
+	// date_of_birth (issue #7) is the durable DOB source, snapshotted onto
+	// interaction_events.contacted_party_dob at ingest time by the caller.
 	CreateDebtor(ctx context.Context, arg CreateDebtorParams) (CreateDebtorRow, error)
 	CreateDespacho(ctx context.Context, arg CreateDespachoParams) (Despacho, error)
 	CreateDetectorResultRow(ctx context.Context, arg CreateDetectorResultRowParams) (CreateDetectorResultRowRow, error)
 	CreateEvaluation(ctx context.Context, arg CreateEvaluationParams) (Evaluation, error)
+	// The detector-input snapshot columns (issue #7) are nullable; passing NULL
+	// for any of them means "unresolved" and each detector fails closed on it
+	// per its own logic (see the deterministic-detectors spec).
 	CreateInteractionEvent(ctx context.Context, arg CreateInteractionEventParams) (CreateInteractionEventRow, error)
 	CreateInteractionTranscript(ctx context.Context, arg CreateInteractionTranscriptParams) (InteractionTranscript, error)
 	CreatePolicyBundle(ctx context.Context, arg CreatePolicyBundleParams) (PolicyBundle, error)
@@ -39,8 +44,10 @@ type Querier interface {
 	GetEvaluationByInteractionEventID(ctx context.Context, arg GetEvaluationByInteractionEventIDParams) (Evaluation, error)
 	// Export endpoint lookup.
 	GetEvidenceRecordByInteraction(ctx context.Context, arg GetEvidenceRecordByInteractionParams) (EvidenceRecord, error)
-	// Evidence export lookup (issue #3): fetch a single interaction scoped to
-	// its tenant.
+	// Evidence export lookup (issue #3), also used by
+	// InteractionLookupAdapter.GetInteractionForReEvaluation (issue #6): the
+	// detector-input snapshot columns (issue #7) MUST be selected here so
+	// re-evaluation reads the SAME snapshot the original evaluation used.
 	GetInteractionEventByID(ctx context.Context, arg GetInteractionEventByIDParams) (GetInteractionEventByIDRow, error)
 	GetInteractionTranscriptByInteraction(ctx context.Context, arg GetInteractionTranscriptByInteractionParams) (InteractionTranscript, error)
 	// ReEvaluateInteraction's historical-bundle validation (issue #6): scoped to

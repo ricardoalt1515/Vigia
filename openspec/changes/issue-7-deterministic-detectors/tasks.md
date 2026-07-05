@@ -9,11 +9,11 @@
 | Chained PRs recommended | Yes |
 | Suggested split | PR1 → PR2a → PR2b → PR2c → PR3 → PR4 |
 | Delivery strategy | ask-on-risk |
-| Chain strategy | pending (ask user) |
+| Chain strategy | stacked-to-main |
 
 Decision needed before apply: Yes
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: stacked-to-main
 400-line budget risk: High
 
 ### Suggested Work Units
@@ -50,11 +50,12 @@ Chain strategy: pending
 
 ## Phase 2b (PR2b): Authorized Channel + Payment Routing
 
-- [ ] 2b.1 [RED] Table-driven tests + `TestXNoIO` for authorized-channel detector (MX-REDECO-11): listed/unlisted/missing-list scenarios.
-- [ ] 2b.2 [GREEN] Implement `internal/detection/authorized_channel.go`.
-- [ ] 2b.3 [RED] Table-driven tests + `TestXNoIO` for payment-routing detector (MX-REDECO-10): creditor/non-creditor/missing scenarios.
-- [ ] 2b.4 [GREEN] Implement `internal/detection/payment_routing.go`.
-- [ ] 2b.5 Wire both in `cmd/api/main.go` + `cmd/seed/main.go`, `RequiresHITL: false`.
+- [x] 2b.1 [RED] Table-driven tests + `TestXNoIO` for authorized-channel detector (MX-REDECO-11): listed/unlisted/missing-list scenarios.
+- [x] 2b.2 [GREEN] Implement `internal/detection/authorized_channel.go`.
+- [x] 2b.3 [RED] Table-driven tests + `TestXNoIO` for payment-routing detector (MX-REDECO-10): creditor/non-creditor/missing scenarios.
+- [x] 2b.4 [GREEN] Implement `internal/detection/payment_routing.go`.
+- [x] 2b.5 Wire both in `cmd/api/main.go` + `cmd/seed/main.go`, `RequiresHITL: false`.
+- [x] 2b.6 (judgment-day fast-follow, discovered in PR2b review) Plumb the detector-input snapshot columns end to end: neither `CreateInteractionEvent`/`GetInteractionEventByID` (sqlc) nor `cmd/seed/devdata.go`'s fixtures nor `internal/postgres/adapters.go`'s `GetInteractionForReEvaluation` populated `detection.Interaction`'s new fields (`Channel`, `ContactPartyRelationship`, `ContactedPartyDOB`, `AuthorizedChannels`, `PaymentRecipient`, `DisclosureProvided`) from persisted data — every interaction evaluated via `cmd/seed dev-data` or `ReEvaluateInteraction` saw zero-valued detector input and MX-REDECO-06/07/10/11 always fail-closed to BLOCK. Fixed: extended `db/queries/{debtors,interaction_events}.sql` + regenerated sqlc; gave every seed fixture explicit compliant defaults plus one demo-violation fixture per new detector; mapped the snapshot onto `detection.Interaction` in the adapter. Verified via `go run ./cmd/seed dev-data` against a migrated dev DB: compliant fixtures pass all four new detectors, each violation fixture blocks only its own detector.
 
 ## Phase 2c (PR2c): Disclosure (warn) + Rename + Seeding
 

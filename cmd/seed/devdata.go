@@ -65,6 +65,13 @@ type DevDataParams struct {
 // explicit default (Decision 2 — no lingering timezone default at the DB layer).
 const defaultDebtorTimezone = "America/Mexico_City"
 
+// defaultDebtorAgeYears is the demo debtor's age (issue #7): an adult, well
+// above both the legal-majority and elderly protected-population
+// thresholds, so the seeded debtor's own date of birth never triggers
+// MX-REDECO-07 on the compliant fixtures. Only the protected-population
+// violation demo fixture overrides this via contactedPartyDOBOverride.
+const defaultDebtorAgeYears = 35
+
 // DevDataCounts records which entities were newly created vs. already present.
 type DevDataCounts struct {
 	TenantCreated       bool
@@ -92,6 +99,74 @@ type interactionFixture struct {
 	transcriptRef string
 	occurredAt    time.Time
 	utterances    []seedUtterance
+
+	// Detector-input snapshot fields (issue #7: MX-REDECO-06/07/10/11).
+	// compliantFixture defaults these to values that PASS all four new
+	// hard-block detectors; a fixture demonstrating one detector's
+	// violation overrides only the field that detector reads, so its
+	// BLOCK is attributable to exactly one new detector at a time.
+	contactPartyRelationship string
+	// contactedPartyDOBOverride, when non-nil, replaces the seeded
+	// debtor's own date of birth for this one interaction (used only by
+	// the protected-population violation demo fixture, to simulate a
+	// protected minor contacted party without changing the debtor's own
+	// record). nil means "snapshot the debtor's date of birth", mirroring
+	// the real contacted_party_dob ingest-time snapshot.
+	contactedPartyDOBOverride *time.Time
+	authorizedChannels        []string
+	paymentRecipient          string
+	disclosureProvided        *bool
+}
+
+// compliantFixture builds an interactionFixture whose detector-input
+// snapshot fields PASS all four new hard-block detectors (MX-REDECO-06:
+// relationship debtor; MX-REDECO-07: debtor's own — adult — date of birth,
+// via contactedPartyDOBOverride left nil; MX-REDECO-11: this fixture's own
+// channel is authorized; MX-REDECO-10: payment routed to the creditor).
+func compliantFixture(channel, direction, transcriptRef string, occurredAt time.Time, utterances []seedUtterance) interactionFixture {
+	return interactionFixture{
+		channel:                  channel,
+		direction:                direction,
+		transcriptRef:            transcriptRef,
+		occurredAt:               occurredAt,
+		utterances:               utterances,
+		contactPartyRelationship: "debtor",
+		authorizedChannels:       []string{channel},
+		paymentRecipient:         "creditor",
+		disclosureProvided:       boolPtr(true),
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// resolvedContactedPartyDOB returns f.contactedPartyDOBOverride when set,
+// otherwise falls back to the debtor's own snapshotted date of birth —
+// mirroring the real ingest-time contacted_party_dob snapshot, which
+// normally mirrors the debtor's own record unless a specific interaction's
+// contacted party differs (used here only by the protected-population
+// violation demo fixture).
+func (f interactionFixture) resolvedContactedPartyDOB(debtorDOB *time.Time) *time.Time {
+	if f.contactedPartyDOBOverride != nil {
+		return f.contactedPartyDOBOverride
+	}
+	return debtorDOB
+}
+
+// toDetectionInteraction builds the detection.Interaction the deterministic
+// detectors evaluate, snapshotting this fixture's channel and
+// detector-input fields (issue #7) alongside the pre-existing
+// OccurredAt/DebtorTimezone fields (issue #2/#3).
+func (f interactionFixture) toDetectionInteraction(debtorTimezone string, debtorDOB *time.Time) detection.Interaction {
+	return detection.Interaction{
+		OccurredAt:               f.occurredAt,
+		DebtorTimezone:           debtorTimezone,
+		Channel:                  core.InteractionChannel(f.channel),
+		ContactPartyRelationship: f.contactPartyRelationship,
+		ContactedPartyDOB:        f.resolvedContactedPartyDOB(debtorDOB),
+		AuthorizedChannels:       f.authorizedChannels,
+		PaymentRecipient:         f.paymentRecipient,
+		DisclosureProvided:       f.disclosureProvided,
+	}
 }
 
 // threateningTranscriptUtterances is Spanish, MX-REDECO-05-marker synthetic
@@ -127,45 +202,76 @@ func neutralTranscriptUtterances() []seedUtterance {
 // data (spec "Seed Provides Threatening and Neutral Synthetic Transcripts").
 func devDataFixtures(now time.Time, debtorLoc *time.Location) []interactionFixture {
 	afterHours := afterHoursInstant(now, debtorLoc)
+
+	thirdPartyDemo := compliantFixture(
+		string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
+		"seed/demo/call-05-third-party", now.Add(-3*time.Hour), nil,
+	)
+	// MX-REDECO-06 violation demo: contacted party is not the debtor and
+	// not an authorized third party. Every other detector input stays
+	// compliant so this interaction's BLOCK is attributable to the
+	// third-party-contact detector alone.
+	thirdPartyDemo.contactPartyRelationship = "third_party"
+
+	protectedMinorDemo := compliantFixture(
+		string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
+		"seed/demo/call-06-protected-minor", now.Add(-2*time.Hour), nil,
+	)
+	// MX-REDECO-07 violation demo: the contacted party is a minor (age 15
+	// as of OccurredAt), which BLOCKs regardless of contactPartyRelationship
+	// (kept "debtor" here) and additionally requires HITL. Overriding only
+	// the DOB — not the seeded debtor's own record — isolates the BLOCK to
+	// the protected-population detector.
+	minorDOB := now.Add(-2*time.Hour).AddDate(-15, 0, 0)
+	protectedMinorDemo.contactedPartyDOBOverride = &minorDOB
+
+	unauthorizedChannelDemo := compliantFixture(
+		string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
+		"seed/demo/call-07-unauthorized-channel", now.Add(-1*time.Hour), nil,
+	)
+	// MX-REDECO-11 violation demo: the interaction's channel ("call") is
+	// not present in the debtor's authorized-channel list (only "email"
+	// is authorized), isolating the BLOCK to the authorized-channel
+	// detector.
+	unauthorizedChannelDemo.authorizedChannels = []string{string(core.InteractionChannelEmail)}
+
+	paymentRoutingDemo := compliantFixture(
+		string(core.InteractionChannelMessage), string(core.InteractionDirectionInbound),
+		"seed/demo/message-08-payment-routing", now.Add(-30*time.Minute), nil,
+	)
+	// MX-REDECO-10 violation demo: payment is routed to a non-creditor
+	// recipient, isolating the BLOCK to the payment-routing detector.
+	paymentRoutingDemo.paymentRecipient = "collector"
+
 	return []interactionFixture{
-		{
-			channel:       string(core.InteractionChannelCall),
-			direction:     string(core.InteractionDirectionOutbound),
-			transcriptRef: "seed/demo/call-01",
-			occurredAt:    now.Add(-72 * time.Hour),
-		},
-		{
-			channel:       string(core.InteractionChannelMessage),
-			direction:     string(core.InteractionDirectionInbound),
-			transcriptRef: "seed/demo/message-01",
-			occurredAt:    now.Add(-48 * time.Hour),
-		},
-		{
-			channel:       string(core.InteractionChannelEmail),
-			direction:     string(core.InteractionDirectionOutbound),
-			transcriptRef: "seed/demo/email-01",
-			occurredAt:    now.Add(-24 * time.Hour),
-		},
-		{
-			channel:       string(core.InteractionChannelCall),
-			direction:     string(core.InteractionDirectionOutbound),
-			transcriptRef: "seed/demo/call-02-after-hours",
-			occurredAt:    afterHours,
-		},
-		{
-			channel:       string(core.InteractionChannelCall),
-			direction:     string(core.InteractionDirectionOutbound),
-			transcriptRef: "seed/demo/call-03-threatening",
-			occurredAt:    now.Add(-12 * time.Hour),
-			utterances:    threateningTranscriptUtterances(),
-		},
-		{
-			channel:       string(core.InteractionChannelCall),
-			direction:     string(core.InteractionDirectionOutbound),
-			transcriptRef: "seed/demo/call-04-neutral",
-			occurredAt:    now.Add(-6 * time.Hour),
-			utterances:    neutralTranscriptUtterances(),
-		},
+		compliantFixture(
+			string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
+			"seed/demo/call-01", now.Add(-72*time.Hour), nil,
+		),
+		compliantFixture(
+			string(core.InteractionChannelMessage), string(core.InteractionDirectionInbound),
+			"seed/demo/message-01", now.Add(-48*time.Hour), nil,
+		),
+		compliantFixture(
+			string(core.InteractionChannelEmail), string(core.InteractionDirectionOutbound),
+			"seed/demo/email-01", now.Add(-24*time.Hour), nil,
+		),
+		compliantFixture(
+			string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
+			"seed/demo/call-02-after-hours", afterHours, nil,
+		),
+		compliantFixture(
+			string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
+			"seed/demo/call-03-threatening", now.Add(-12*time.Hour), threateningTranscriptUtterances(),
+		),
+		compliantFixture(
+			string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
+			"seed/demo/call-04-neutral", now.Add(-6*time.Hour), neutralTranscriptUtterances(),
+		),
+		thirdPartyDemo,
+		protectedMinorDemo,
+		unauthorizedChannelDemo,
+		paymentRoutingDemo,
 	}
 }
 
@@ -225,11 +331,16 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 	}
 	var debtorID pgtype.UUID
 	var debtorTimezone string
+	// debtorDOB is the durable DOB source (issue #7), snapshotted onto each
+	// created interaction_events row's contacted_party_dob column below,
+	// unless a fixture supplies its own contactedPartyDOBOverride.
+	var debtorDOB *time.Time
 	debtorFound := false
 	for _, d := range existingDebtors {
 		if d.ExternalRef == p.DebtorRef {
 			debtorID = d.ID
 			debtorTimezone = d.Timezone
+			debtorDOB = pgDateToTimePtr(d.DateOfBirth)
 			debtorFound = true
 			break
 		}
@@ -242,17 +353,20 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 		if _, err := time.LoadLocation(timezone); err != nil {
 			return DevDataResult{}, fmt.Errorf("invalid debtor timezone %q: %w", timezone, err)
 		}
+		dob := now.AddDate(-defaultDebtorAgeYears, 0, 0)
 		created, err := q.CreateDebtor(ctx, vigiaDB.CreateDebtorParams{
 			TenantID:    tenant.ID,
 			ExternalRef: p.DebtorRef,
 			DisplayName: p.DebtorName,
 			Timezone:    timezone,
+			DateOfBirth: timeToPgDate(dob),
 		})
 		if err != nil {
 			return DevDataResult{}, fmt.Errorf("create debtor: %w", err)
 		}
 		debtorID = created.ID
 		debtorTimezone = created.Timezone
+		debtorDOB = pgDateToTimePtr(created.DateOfBirth)
 		result.Created.DebtorCreated = true
 	}
 	result.DebtorID = uuidToString(debtorID)
@@ -308,11 +422,8 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 				if _, err := evaluator.EvaluateInteraction(ctx, evaluation.EvaluateInteractionInput{
 					TenantID:           result.TenantID,
 					InteractionEventID: uuidToString(id),
-					Interaction: detection.Interaction{
-						OccurredAt:     fix.occurredAt,
-						DebtorTimezone: debtorTimezone,
-					},
-					Utterances: utterances,
+					Interaction:        fix.toDetectionInteraction(debtorTimezone, debtorDOB),
+					Utterances:         utterances,
 				}); err != nil {
 					return DevDataResult{}, fmt.Errorf("backfill evaluate interaction event %s: %w", fix.transcriptRef, err)
 				}
@@ -330,8 +441,13 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 				Time:  fix.occurredAt,
 				Valid: true,
 			},
-			TranscriptRef:  &ref,
-			DebtorTimezone: debtorTimezone,
+			TranscriptRef:            &ref,
+			DebtorTimezone:           debtorTimezone,
+			ContactPartyRelationship: optionalString(fix.contactPartyRelationship),
+			ContactedPartyDob:        optionalPgDate(fix.resolvedContactedPartyDOB(debtorDOB)),
+			AuthorizedChannels:       fix.authorizedChannels,
+			PaymentRecipient:         optionalString(fix.paymentRecipient),
+			DisclosureProvided:       fix.disclosureProvided,
 		})
 		if err != nil {
 			return DevDataResult{}, fmt.Errorf("create interaction event %s: %w", fix.transcriptRef, err)
@@ -352,11 +468,8 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 		if _, err := evaluator.EvaluateInteraction(ctx, evaluation.EvaluateInteractionInput{
 			TenantID:           result.TenantID,
 			InteractionEventID: interactionID,
-			Interaction: detection.Interaction{
-				OccurredAt:     fix.occurredAt,
-				DebtorTimezone: debtorTimezone,
-			},
-			Utterances: utterances,
+			Interaction:        fix.toDetectionInteraction(debtorTimezone, debtorDOB),
+			Utterances:         utterances,
 		}); err != nil {
 			return DevDataResult{}, fmt.Errorf("evaluate interaction event %s: %w", fix.transcriptRef, err)
 		}
@@ -457,4 +570,43 @@ func uuidToString(u pgtype.UUID) string {
 		b[8], b[9],
 		b[10], b[11], b[12], b[13], b[14], b[15],
 	)
+}
+
+// optionalString returns nil for an empty string, otherwise a pointer to s.
+// Mirrors the "empty/unset means unresolved, detector fails closed" contract
+// (issue #7) for the nullable *string detector-input columns.
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// timeToPgDate converts a time.Time to a valid pgtype.Date, truncating any
+// time-of-day/location component to the UTC calendar date — dates have no
+// time-of-day component in Postgres.
+func timeToPgDate(t time.Time) pgtype.Date {
+	return pgtype.Date{
+		Time:  time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC),
+		Valid: true,
+	}
+}
+
+// optionalPgDate converts a *time.Time to a pgtype.Date, returning an
+// invalid (NULL) pgtype.Date for a nil input.
+func optionalPgDate(t *time.Time) pgtype.Date {
+	if t == nil {
+		return pgtype.Date{}
+	}
+	return timeToPgDate(*t)
+}
+
+// pgDateToTimePtr converts a pgtype.Date to *time.Time, returning nil for an
+// invalid (NULL) date.
+func pgDateToTimePtr(d pgtype.Date) *time.Time {
+	if !d.Valid {
+		return nil
+	}
+	t := d.Time
+	return &t
 }

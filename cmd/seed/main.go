@@ -182,6 +182,8 @@ func runDevData(ctx context.Context, args []string) error {
 			}},
 			{Code: "MX-REDECO-06", Detector: detection.ThirdPartyContactDetector{}},
 			{Code: "MX-REDECO-07", Detector: detection.ProtectedPopulationDetector{}, RequiresHITL: true},
+			{Code: "MX-REDECO-11", Detector: detection.AuthorizedChannelDetector{}},
+			{Code: "MX-REDECO-10", Detector: detection.PaymentRoutingDetector{}},
 		},
 		Judges: []evaluation.NamedJudge{
 			{Code: "MX-REDECO-05", Judge: buildJudge(cfg)},

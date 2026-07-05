@@ -755,11 +755,37 @@ func (a *InteractionLookupAdapter) GetInteractionForReEvaluation(ctx context.Con
 			}
 		}
 
+		var contactedPartyDOB *time.Time
+		if row.ContactedPartyDob.Valid {
+			dob := row.ContactedPartyDob.Time
+			contactedPartyDOB = &dob
+		}
+		var contactPartyRelationship string
+		if row.ContactPartyRelationship != nil {
+			contactPartyRelationship = *row.ContactPartyRelationship
+		}
+		var paymentRecipient string
+		if row.PaymentRecipient != nil {
+			paymentRecipient = *row.PaymentRecipient
+		}
+
 		result = evaluation.ReEvaluationInput{
 			TenantID: uuidString(row.TenantID),
 			Interaction: detection.Interaction{
-				OccurredAt:     row.OccurredAt.Time,
-				DebtorTimezone: row.DebtorTimezone,
+				OccurredAt: row.OccurredAt.Time,
+				// Channel and the detector-input snapshot columns
+				// (issue #7: MX-REDECO-06/07/10/11) MUST be mapped here
+				// so re-evaluation reads the SAME snapshot the original
+				// evaluation used (issue #6 reproducibility guarantee) —
+				// never re-derived or re-fetched from a live debtor
+				// record.
+				DebtorTimezone:           row.DebtorTimezone,
+				Channel:                  core.InteractionChannel(row.Channel),
+				ContactPartyRelationship: contactPartyRelationship,
+				ContactedPartyDOB:        contactedPartyDOB,
+				AuthorizedChannels:       row.AuthorizedChannels,
+				PaymentRecipient:         paymentRecipient,
+				DisclosureProvided:       row.DisclosureProvided,
 			},
 			Utterances: utterances,
 		}
