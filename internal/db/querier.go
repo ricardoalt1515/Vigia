@@ -31,6 +31,31 @@ type Querier interface {
 	CreatePolicyRule(ctx context.Context, arg CreatePolicyRuleParams) (PolicyRule, error)
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
 	CreateTenantAPIKey(ctx context.Context, arg CreateTenantAPIKeyParams) (TenantApiKey, error)
+	// Per-REDECO-rule-code breakdown, tenant-scoped implicitly by RLS.
+	// "violations" counts outcome = 'fail' rows only; "warnings" is a separate
+	// count of outcome = 'warn' rows (non-zero in practice only for
+	// MX-REDECO-03) so warn-level activity is visible without inflating
+	// violations. Both are computed by the same SQL GROUP BY, never fetched and
+	// counted in application code.
+	DashboardByCause(ctx context.Context) ([]DashboardByCauseRow, error)
+	// Interaction-grain (never detector_result_rows row-grain) violation-rate
+	// ranking, one evaluation per interaction_event enforced by evaluations'
+	// UNIQUE(tenant_id, interaction_event_id). Tenant-scoped implicitly by RLS
+	// (current_setting('app.tenant_id')), like CountOutOfHoursEvaluations --
+	// no explicit tenant_id filter here. Unattributed interactions
+	// (interaction_events.despacho_id IS NULL) are reported under an explicit
+	// synthetic bucket (despacho_id NULL, despacho_name "unattributed") rather
+	// than silently dropped or folded into a named despacho. "violations" counts
+	// only rows with outcome = 'fail' (never != 'pass'), so 'review' (judge
+	// uncertainty) and 'warn' (MX-REDECO-03 confirmed warn-level signal) rows
+	// are excluded, matching the by-cause endpoint's predicate.
+	// Wrapped in a derived table so the ORDER BY expression below can reference
+	// "total"/"violations"/"despacho_name" as real output columns of `agg`:
+	// referencing an output-list alias (rather than a bare matching identifier)
+	// inside an arithmetic ORDER BY expression on the original query is resolved
+	// against the FROM-list instead and fails with "column ... does not exist"
+	// since no such source column exists.
+	DashboardByDespacho(ctx context.Context) ([]DashboardByDespachoRow, error)
 	// Resolves THE active bundle for a tenant (Design Decision 3/4): today's
 	// BundleResolver seam resolves per-tenant only, with no bundle "name" input.
 	// If a tenant were to ever activate more than one named bundle

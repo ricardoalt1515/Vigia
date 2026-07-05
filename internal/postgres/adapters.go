@@ -451,6 +451,86 @@ func (r *SummaryReader) CountOutOfHours(ctx context.Context, tenantID string) (i
 
 var _ httpapi.SummaryReader = (*SummaryReader)(nil)
 
+// DashboardReader computes the two tenant-scoped compliance dashboards
+// (by-despacho violation-rate ranking, by-REDECO-cause breakdown) via SQL
+// aggregates inside tenantdb.WithTenantTx, the same seam SummaryReader uses.
+type DashboardReader struct {
+	db tenantdb.Beginner
+}
+
+func NewDashboardReader(db tenantdb.Beginner) *DashboardReader {
+	return &DashboardReader{db: db}
+}
+
+func NewDashboardReaderFromPool(pool *pgxpool.Pool) *DashboardReader {
+	return NewDashboardReader(poolBeginner{pool: pool})
+}
+
+// uuidStringPtr returns nil for a zero-value/invalid pgtype.UUID (the
+// unattributed bucket's LEFT JOIN despachos miss), and the string form
+// otherwise.
+func uuidStringPtr(id pgtype.UUID) *string {
+	if !id.Valid {
+		return nil
+	}
+	s := uuidString(id)
+	return &s
+}
+
+func (r *DashboardReader) ByDespacho(ctx context.Context, tenantID string) ([]httpapi.DespachoRate, error) {
+	var items []httpapi.DespachoRate
+	err := tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		rows, err := vigiaDB.New(tx).DashboardByDespacho(ctx)
+		if err != nil {
+			return err
+		}
+		items = make([]httpapi.DespachoRate, 0, len(rows))
+		for _, row := range rows {
+			var rate float64
+			if row.Total > 0 {
+				rate = float64(row.Violations) / float64(row.Total)
+			}
+			items = append(items, httpapi.DespachoRate{
+				DespachoID:    uuidStringPtr(row.DespachoID),
+				DespachoName:  row.DespachoName,
+				Total:         row.Total,
+				Violations:    row.Violations,
+				ViolationRate: rate,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (r *DashboardReader) ByCause(ctx context.Context, tenantID string) ([]httpapi.CauseCount, error) {
+	var items []httpapi.CauseCount
+	err := tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		rows, err := vigiaDB.New(tx).DashboardByCause(ctx)
+		if err != nil {
+			return err
+		}
+		items = make([]httpapi.CauseCount, 0, len(rows))
+		for _, row := range rows {
+			items = append(items, httpapi.CauseCount{
+				RuleCode:   row.RuleCode,
+				Violations: row.Violations,
+				Warnings:   row.Warnings,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+var _ httpapi.DashboardReader = (*DashboardReader)(nil)
+
 // ChainVerifier is the store-backed adapter around ledger.VerifyChain: it
 // loads a tenant's evidence records ordered by seq inside a tenant-scoped
 // transaction, maps them to the pure ledger.EvidenceRecord shape, and

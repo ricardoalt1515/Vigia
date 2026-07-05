@@ -59,6 +59,37 @@ type EvidenceReader interface {
 	GetEvidencePackage(ctx context.Context, tenantID, interactionID string) (ledger.Package, error)
 }
 
+// DespachoRate is one row of the by-despacho violation-rate ranking.
+// DespachoID is nil for the synthetic "unattributed" bucket, which covers
+// interactions with no despacho FK set rather than silently dropping them
+// or folding them into a named despacho. ViolationRate is
+// Violations/Total, guarded against a zero Total by DashboardReader.
+type DespachoRate struct {
+	DespachoID    *string `json:"despacho_id"`
+	DespachoName  string  `json:"despacho_name"`
+	Total         int64   `json:"total"`
+	Violations    int64   `json:"violations"`
+	ViolationRate float64 `json:"violation_rate"`
+}
+
+// CauseCount is one row of the by-REDECO-cause breakdown. Violations counts
+// only outcome = 'fail' rows; Warnings is a separate count of outcome =
+// 'warn' rows (non-zero in practice only for MX-REDECO-03) so warn-level
+// activity is visible without inflating Violations.
+type CauseCount struct {
+	RuleCode   string `json:"rule_code"`
+	Violations int64  `json:"violations"`
+	Warnings   int64  `json:"warnings"`
+}
+
+// DashboardReader returns the two tenant-scoped compliance dashboards, both
+// computed as SQL aggregates (never client-side), following the same
+// tenantdb.WithTenantTx + RLS seam as SummaryReader.CountOutOfHours.
+type DashboardReader interface {
+	ByDespacho(ctx context.Context, tenantID string) ([]DespachoRate, error)
+	ByCause(ctx context.Context, tenantID string) ([]CauseCount, error)
+}
+
 // ReEvaluator reruns the wired detectors/judge against a historical
 // interaction and stamps a caller-supplied historical PolicyBundle version
 // onto the (unpersisted) result (issue #6). Implementations resolve the
@@ -76,22 +107,26 @@ type Server struct {
 	summary       SummaryReader
 	evidence      EvidenceReader
 	reevaluator   ReEvaluator
+	dashboards    DashboardReader
 	mux           *http.ServeMux
 }
 
-func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader, evidence EvidenceReader, reevaluator ReEvaluator) *Server {
+func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader, evidence EvidenceReader, reevaluator ReEvaluator, dashboards DashboardReader) *Server {
 	s := &Server{
 		authenticator: authenticator,
 		interactions:  interactions,
 		summary:       summary,
 		evidence:      evidence,
 		reevaluator:   reevaluator,
+		dashboards:    dashboards,
 		mux:           http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /v1/interactions", s.handleGetInteractions)
 	s.mux.HandleFunc("GET /v1/summary", s.handleGetSummary)
 	s.mux.HandleFunc("GET /v1/interactions/{id}/evidence", s.handleGetEvidence)
 	s.mux.HandleFunc("POST /v1/interactions/{id}/reevaluate", s.handleReEvaluate)
+	s.mux.HandleFunc("GET /v1/dashboards/by-despacho", s.handleGetDashboardByDespacho)
+	s.mux.HandleFunc("GET /v1/dashboards/by-cause", s.handleGetDashboardByCause)
 	return s
 }
 
@@ -248,6 +283,63 @@ func (s *Server) handleReEvaluate(w http.ResponseWriter, r *http.Request) {
 		PolicyBundleVersion: got.PolicyBundleVersion,
 		PolicyBundleID:      policyBundleID,
 	}); err != nil {
+		return
+	}
+}
+
+// despachoRatesResponse wraps the by-despacho ranking in a named key,
+// following the same array-wrapping convention as interactionsResponse.
+type despachoRatesResponse struct {
+	Despachos []DespachoRate `json:"despachos"`
+}
+
+func (s *Server) handleGetDashboardByDespacho(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	rates, err := s.dashboards.ByDespacho(r.Context(), tenant.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(despachoRatesResponse{Despachos: rates}); err != nil {
+		return
+	}
+}
+
+// causeCountsResponse wraps the by-cause breakdown in a named key.
+type causeCountsResponse struct {
+	Causes []CauseCount `json:"causes"`
+}
+
+func (s *Server) handleGetDashboardByCause(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	counts, err := s.dashboards.ByCause(r.Context(), tenant.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(causeCountsResponse{Causes: counts}); err != nil {
 		return
 	}
 }
