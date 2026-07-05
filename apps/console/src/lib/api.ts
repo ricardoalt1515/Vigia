@@ -105,3 +105,88 @@ export async function getSummary(): Promise<Summary> {
 
   return { out_of_hours_count: 0 };
 }
+
+// Canonical shape from GET /v1/dashboards/by-despacho
+// (internal/httpapi/httpapi.go):
+//   { "despachos": [ { "despacho_id", "despacho_name", "total",
+//                       "violations", "violation_rate" }, ... ] }
+// despacho_id is null for the synthetic "unattributed" bucket, which
+// covers interactions with no despacho FK set.
+export type DespachoRate = {
+  despacho_id: string | null;
+  despacho_name: string;
+  total: number;
+  violations: number;
+  violation_rate: number;
+};
+
+export async function listByDespacho(): Promise<DespachoRate[]> {
+  const { base, key } = apiConfig();
+
+  const res = await fetch(`${base}/v1/dashboards/by-despacho`, {
+    headers: {
+      Authorization: `Bearer ${key}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `GET /v1/dashboards/by-despacho failed: ${res.status} ${res.statusText}`,
+    );
+  }
+
+  const body: unknown = await res.json();
+
+  if (
+    body !== null &&
+    typeof body === "object" &&
+    "despachos" in body &&
+    Array.isArray((body as { despachos: unknown }).despachos)
+  ) {
+    return (body as { despachos: DespachoRate[] }).despachos;
+  }
+
+  return [];
+}
+
+// Canonical shape from GET /v1/dashboards/by-cause
+// (internal/httpapi/httpapi.go):
+//   { "causes": [ { "rule_code", "violations", "warnings" }, ... ] }
+// warnings is a separate count of outcome = 'warn' rows (non-zero in
+// practice only for MX-REDECO-03) and is never folded into violations.
+export type CauseCount = {
+  rule_code: string;
+  violations: number;
+  warnings: number;
+};
+
+export async function listByCause(): Promise<CauseCount[]> {
+  const { base, key } = apiConfig();
+
+  const res = await fetch(`${base}/v1/dashboards/by-cause`, {
+    headers: {
+      Authorization: `Bearer ${key}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `GET /v1/dashboards/by-cause failed: ${res.status} ${res.statusText}`,
+    );
+  }
+
+  const body: unknown = await res.json();
+
+  if (
+    body !== null &&
+    typeof body === "object" &&
+    "causes" in body &&
+    Array.isArray((body as { causes: unknown }).causes)
+  ) {
+    return (body as { causes: CauseCount[] }).causes;
+  }
+
+  return [];
+}
