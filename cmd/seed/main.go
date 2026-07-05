@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -177,13 +178,14 @@ func runDevData(ctx context.Context, args []string) error {
 	issuer := defaultKeyIssuer{store: postgresTenantAPIKeyCreator{queries: queries}}
 	evaluator := evaluation.Service{
 		Detectors: []evaluation.NamedDetector{
-			{Code: "contact-hours", Detector: detection.ContactHoursDetector{
+			{Code: "MX-REDECO-04", Detector: detection.ContactHoursDetector{
 				Window: detection.Window{StartHour: 8, EndHour: 21},
 			}},
 			{Code: "MX-REDECO-06", Detector: detection.ThirdPartyContactDetector{}},
 			{Code: "MX-REDECO-07", Detector: detection.ProtectedPopulationDetector{}, RequiresHITL: true},
 			{Code: "MX-REDECO-11", Detector: detection.AuthorizedChannelDetector{}},
 			{Code: "MX-REDECO-10", Detector: detection.PaymentRoutingDetector{}},
+			{Code: "MX-REDECO-03", Detector: detection.DisclosureDetector{}},
 		},
 		Judges: []evaluation.NamedJudge{
 			{Code: "MX-REDECO-05", Judge: buildJudge(cfg)},
@@ -202,6 +204,20 @@ func runDevData(ctx context.Context, args []string) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	// Seed the seven REDECO rule-catalog rows and, on first run, one active
+	// "redeco-baseline" bundle version (issue #7 Design Decision "catalog +
+	// bundle seeding idempotency").
+	tenantID, err := parseUUID(result.TenantID)
+	if err != nil {
+		return fmt.Errorf("parse seeded tenant id: %w", err)
+	}
+	if _, err := SeedPolicyCatalogAndBundle(
+		ctx, queries, queries, postgres.NewPolicyBundleStoreFromPool(pool),
+		tenantID, result.TenantID, time.Now().UTC(),
+	); err != nil {
+		return fmt.Errorf("seed policy catalog and bundle: %w", err)
 	}
 
 	fmt.Printf("tenant_api_key=%s\n", result.PlaintextKey)

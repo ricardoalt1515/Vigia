@@ -59,14 +59,14 @@ Chain strategy: stacked-to-main
 
 ## Phase 2c (PR2c): Disclosure (warn) + Rename + Seeding
 
-- [ ] 2c.1 [RED] Table-driven tests + `TestXNoIO` for disclosure detector (MX-REDECO-03): stated-pass, not-stated-warn, missing-warn (fail-closed to warn, not block).
-- [ ] 2c.2 [GREEN] Implement `internal/detection/disclosure.go`.
-- [ ] 2c.3 Rename `"contact-hours"` → `"MX-REDECO-04"` in `cmd/api/main.go`, `cmd/seed/main.go`, and `cmd/seed/devdata_integration_test.go` only.
+- [x] 2c.1 [RED] Table-driven tests + `TestXNoIO` for disclosure detector (MX-REDECO-03): stated-pass, not-stated-warn, missing-warn (fail-closed to warn, not block).
+- [x] 2c.2 [GREEN] Implement `internal/detection/disclosure.go`.
+- [x] 2c.3 Rename `"contact-hours"` → `"MX-REDECO-04"` in `cmd/api/main.go`, `cmd/seed/main.go`, and `cmd/seed/devdata_integration_test.go` only.
 - [x] 2c.4 Add `detector_code` backfill (forward + reversible `Down`) in migration 00008. (Completed in PR1: bundled into the single 00008 migration file per design.md's "Single migration 00008" rollout note — the Go-side rename in 2c.3 is still pending for PR2c.)
-- [ ] 2c.5 Add `UpsertPolicyRule` (`ON CONFLICT (code) DO UPDATE`) to `db/queries/policies.sql` + sqlc regen.
-- [ ] 2c.6 Implement `cmd/seed` seeding: all 7 rules via `UpsertPolicyRule`; one active `redeco-baseline` bundle via `CreateBundleVersion` guarded by `GetActiveBundleByTenant`; MX-REDECO-03 severity `medium`, others `high`.
-- [ ] 2c.7 [integration] Test: seed idempotency (re-run doesn't duplicate/error), all 7 catalog rows + bundle snapshot with `LegalBasis`/`EffectiveDate`.
-- [ ] 2c.8 [integration] Test: warn-only interaction stays overall `pass`; warn+block coexisting yields overall `fail`.
+- [x] 2c.5 Add `UpsertPolicyRule` (`ON CONFLICT (code) DO UPDATE`) to `db/queries/policies.sql` + sqlc regen.
+- [x] 2c.6 Implement `cmd/seed` seeding: all 7 rules via `UpsertPolicyRule`; one active `redeco-baseline` bundle via `CreateBundleVersion` guarded by `GetActiveBundleByTenant`; MX-REDECO-03 severity `medium`, others `high`.
+- [x] 2c.7 [integration] Test: seed idempotency (re-run doesn't duplicate/error), all 7 catalog rows + bundle snapshot with `LegalBasis`/`EffectiveDate`. (`cmd/seed/policy_seed_integration_test.go`.)
+- [x] 2c.8 [integration] Test: warn-only interaction stays overall `pass`; warn+block coexisting yields overall `fail`. Satisfied two ways: (1) PR2a's `internal/evaluation/service_test.go` — "warn outcome maps to warn severity medium and does not flip overall outcome" + "warn row coexisting with a hard-block row yields overall fail" — pure Service-level tests with a fake `EvaluationStore`, mirroring the 2a.9 HITL precedent; (2) `cmd/seed/devdata_integration_test.go`'s disclosure-warn demo fixture (`seed/demo/call-09-disclosure-warn`) now proves the SAME scenario end to end against real Postgres, including the overall_outcome=`pass` assertion: after judgment-day round 1 found that `now.Add(-N)`-relative fixture timestamps made seeded outcomes non-deterministic (the wall-clock-relative contact-hours detector could fail even "compliant" fixtures depending on when `cmd/seed dev-data` was actually run), every dev-data fixture's `OccurredAt` was repinned to a fixed calendar date/time (`fixtureInstant`, `cmd/seed/devdata.go`) inside the debtor-local contact-hours window — except `call-02-after-hours`, which is deliberately pinned outside it. This made the disclosure-warn fixture's overall_outcome deterministically `pass` (and the compliant `call-01` fixture's overall_outcome deterministically `pass` too), so the direct Postgres-backed assertion is now safe and is asserted directly (no longer worked around).
 
 ## Phase 3 (PR3): API Aggregate Endpoints
 

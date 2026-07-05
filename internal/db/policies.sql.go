@@ -284,3 +284,44 @@ func (q *Queries) SupersedePolicyBundle(ctx context.Context, arg SupersedePolicy
 	_, err := q.db.Exec(ctx, supersedePolicyBundle, arg.ID, arg.TenantID)
 	return err
 }
+
+const upsertPolicyRule = `-- name: UpsertPolicyRule :one
+INSERT INTO policy_rules (code, title, description, severity)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (code) DO UPDATE SET
+    title = EXCLUDED.title,
+    description = EXCLUDED.description,
+    severity = EXCLUDED.severity
+RETURNING id, code, title, description, severity, created_at
+`
+
+type UpsertPolicyRuleParams struct {
+	Code        string `json:"code"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Severity    string `json:"severity"`
+}
+
+// Idempotent catalog seeding (issue #7 Design Decision "catalog + bundle
+// seeding idempotency"): policy_rules.code is UNIQUE, so a plain
+// CreatePolicyRule would fail on re-seed. ON CONFLICT (code) DO UPDATE keeps
+// a single row per rule code and refreshes title/description/severity to
+// the current catalog values on every seed run.
+func (q *Queries) UpsertPolicyRule(ctx context.Context, arg UpsertPolicyRuleParams) (PolicyRule, error) {
+	row := q.db.QueryRow(ctx, upsertPolicyRule,
+		arg.Code,
+		arg.Title,
+		arg.Description,
+		arg.Severity,
+	)
+	var i PolicyRule
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Title,
+		&i.Description,
+		&i.Severity,
+		&i.CreatedAt,
+	)
+	return i, err
+}

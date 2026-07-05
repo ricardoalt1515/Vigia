@@ -192,6 +192,32 @@ func neutralTranscriptUtterances() []seedUtterance {
 	}
 }
 
+// fixedDemoYear/Month/Day anchor every dev-data fixture's OccurredAt to one
+// fixed calendar date (a Monday) instead of an offset relative to
+// time.Now(). This is deliberate: judgment-day (issue #7 PR2c round 1) found
+// that anchoring fixtures to `now.Add(-N)` made the seeded evaluations
+// non-deterministic — even the "compliant" fixtures intermittently failed
+// the contact-hours detector (MX-REDECO-04) whenever `cmd/seed dev-data`
+// happened to run close to or after the debtor-local [08:00, 21:00) window,
+// since every "recent" offset landed near whatever the real wall-clock time
+// was. Pinning every fixture to a fixed weekday removes that dependency
+// entirely: the same fixture always evaluates the same way, regardless of
+// when the seed command is actually invoked.
+const (
+	fixedDemoYear  = 2026
+	fixedDemoMonth = time.June
+	fixedDemoDay   = 15 // a Monday
+)
+
+// fixtureInstant returns the fixed-date instant at the given debtor-local
+// wall-clock hour/minute, in loc. Every dev-data fixture except
+// call-02-after-hours uses an hour within [08:00, 21:00) so it passes the
+// contact-hours detector; call-02-after-hours deliberately uses 22:00,
+// outside that window, to demonstrate the HARD BLOCK.
+func fixtureInstant(loc *time.Location, hour, minute int) time.Time {
+	return time.Date(fixedDemoYear, fixedDemoMonth, fixedDemoDay, hour, minute, 0, 0, loc)
+}
+
 // devDataFixtures returns the canonical es-MX demo interaction fixtures,
 // including one interaction whose debtor-local wall-clock time falls
 // outside the contact-hours window [08:00:00, 21:00:00) so the
@@ -200,34 +226,47 @@ func neutralTranscriptUtterances() []seedUtterance {
 // threatening + one neutral synthetic transcript so the tone/threat judge,
 // the requires_hitl flag, and the console threat/HITL badge render with dev
 // data (spec "Seed Provides Threatening and Neutral Synthetic Transcripts").
-func devDataFixtures(now time.Time, debtorLoc *time.Location) []interactionFixture {
-	afterHours := afterHoursInstant(now, debtorLoc)
-
+//
+// Every fixture's OccurredAt is pinned to a fixed calendar date (see
+// fixtureInstant) so seeded outcomes are deterministic regardless of when
+// this command actually runs. Existing dev databases seeded before this
+// change keep their old now-relative rows: idempotency is keyed by
+// transcript_ref, so re-running the seed against an already-seeded tenant
+// inserts nothing for these refs even though their occurred_at values won't
+// retroactively move to the new fixed date.
+func devDataFixtures(debtorLoc *time.Location) []interactionFixture {
 	thirdPartyDemo := compliantFixture(
 		string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
-		"seed/demo/call-05-third-party", now.Add(-3*time.Hour), nil,
+		"seed/demo/call-05-third-party", fixtureInstant(debtorLoc, 12, 30), nil,
 	)
 	// MX-REDECO-06 violation demo: contacted party is not the debtor and
 	// not an authorized third party. Every other detector input stays
-	// compliant so this interaction's BLOCK is attributable to the
-	// third-party-contact detector alone.
+	// compliant except disclosureProvided (see below), so this
+	// interaction's BLOCK is attributable to the third-party-contact
+	// detector alone.
 	thirdPartyDemo.contactPartyRelationship = "third_party"
+	// Also emits a coexisting MX-REDECO-03 warn (disclosure not stated),
+	// demonstrating that a warn row coexisting with a hard-block row still
+	// yields overall fail, driven by the block (spec "A warn row coexisting
+	// with a hard-block row yields overall fail").
+	thirdPartyDemo.disclosureProvided = boolPtr(false)
 
+	protectedMinorOccurredAt := fixtureInstant(debtorLoc, 13, 0)
 	protectedMinorDemo := compliantFixture(
 		string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
-		"seed/demo/call-06-protected-minor", now.Add(-2*time.Hour), nil,
+		"seed/demo/call-06-protected-minor", protectedMinorOccurredAt, nil,
 	)
 	// MX-REDECO-07 violation demo: the contacted party is a minor (age 15
 	// as of OccurredAt), which BLOCKs regardless of contactPartyRelationship
 	// (kept "debtor" here) and additionally requires HITL. Overriding only
 	// the DOB — not the seeded debtor's own record — isolates the BLOCK to
 	// the protected-population detector.
-	minorDOB := now.Add(-2*time.Hour).AddDate(-15, 0, 0)
+	minorDOB := protectedMinorOccurredAt.AddDate(-15, 0, 0)
 	protectedMinorDemo.contactedPartyDOBOverride = &minorDOB
 
 	unauthorizedChannelDemo := compliantFixture(
 		string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
-		"seed/demo/call-07-unauthorized-channel", now.Add(-1*time.Hour), nil,
+		"seed/demo/call-07-unauthorized-channel", fixtureInstant(debtorLoc, 13, 30), nil,
 	)
 	// MX-REDECO-11 violation demo: the interaction's channel ("call") is
 	// not present in the debtor's authorized-channel list (only "email"
@@ -237,54 +276,57 @@ func devDataFixtures(now time.Time, debtorLoc *time.Location) []interactionFixtu
 
 	paymentRoutingDemo := compliantFixture(
 		string(core.InteractionChannelMessage), string(core.InteractionDirectionInbound),
-		"seed/demo/message-08-payment-routing", now.Add(-30*time.Minute), nil,
+		"seed/demo/message-08-payment-routing", fixtureInstant(debtorLoc, 14, 0), nil,
 	)
 	// MX-REDECO-10 violation demo: payment is routed to a non-creditor
 	// recipient, isolating the BLOCK to the payment-routing detector.
 	paymentRoutingDemo.paymentRecipient = "collector"
 
+	disclosureWarnDemo := compliantFixture(
+		string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
+		"seed/demo/call-09-disclosure-warn", fixtureInstant(debtorLoc, 14, 30), nil,
+	)
+	// MX-REDECO-03 warn-only demo: the required UNE/complaints-unit
+	// disclosure was not stated, but every hard-block detector input stays
+	// compliant, so this interaction's evaluation stays overall PASS with a
+	// single warn/medium detector_result_rows entry (spec "A warn-only
+	// interaction evaluation stays overall pass").
+	disclosureWarnDemo.disclosureProvided = boolPtr(false)
+
 	return []interactionFixture{
 		compliantFixture(
 			string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
-			"seed/demo/call-01", now.Add(-72*time.Hour), nil,
+			"seed/demo/call-01", fixtureInstant(debtorLoc, 10, 0), nil,
 		),
 		compliantFixture(
 			string(core.InteractionChannelMessage), string(core.InteractionDirectionInbound),
-			"seed/demo/message-01", now.Add(-48*time.Hour), nil,
+			"seed/demo/message-01", fixtureInstant(debtorLoc, 10, 30), nil,
 		),
 		compliantFixture(
 			string(core.InteractionChannelEmail), string(core.InteractionDirectionOutbound),
-			"seed/demo/email-01", now.Add(-24*time.Hour), nil,
+			"seed/demo/email-01", fixtureInstant(debtorLoc, 11, 0), nil,
 		),
 		compliantFixture(
 			string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
-			"seed/demo/call-02-after-hours", afterHours, nil,
+			// Deliberately outside [08:00, 21:00): demonstrates the
+			// contact-hours HARD BLOCK (spec "Seed Provides Timezone and an
+			// Out-of-Hours Demo Interaction").
+			"seed/demo/call-02-after-hours", fixtureInstant(debtorLoc, 22, 0), nil,
 		),
 		compliantFixture(
 			string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
-			"seed/demo/call-03-threatening", now.Add(-12*time.Hour), threateningTranscriptUtterances(),
+			"seed/demo/call-03-threatening", fixtureInstant(debtorLoc, 11, 30), threateningTranscriptUtterances(),
 		),
 		compliantFixture(
 			string(core.InteractionChannelCall), string(core.InteractionDirectionOutbound),
-			"seed/demo/call-04-neutral", now.Add(-6*time.Hour), neutralTranscriptUtterances(),
+			"seed/demo/call-04-neutral", fixtureInstant(debtorLoc, 12, 0), neutralTranscriptUtterances(),
 		),
 		thirdPartyDemo,
 		protectedMinorDemo,
 		unauthorizedChannelDemo,
 		paymentRoutingDemo,
+		disclosureWarnDemo,
 	}
-}
-
-// afterHoursInstant returns an instant, at or before now, whose debtor-local
-// wall-clock time is 22:00:00 — outside the [08:00:00, 21:00:00) contact
-// window regardless of the debtor's timezone.
-func afterHoursInstant(now time.Time, debtorLoc *time.Location) time.Time {
-	local := now.In(debtorLoc)
-	candidate := time.Date(local.Year(), local.Month(), local.Day(), 22, 0, 0, 0, debtorLoc)
-	if candidate.After(now) {
-		candidate = candidate.AddDate(0, 0, -1)
-	}
-	return candidate
 }
 
 // SeedDevData creates a demo tenant, debtor, and three labeled es-MX interaction events,
@@ -393,7 +435,7 @@ func SeedDevData(ctx context.Context, q SeedQuerier, issue KeyIssuer, evaluator 
 		}
 	}
 
-	fixtures := devDataFixtures(now, debtorLoc)
+	fixtures := devDataFixtures(debtorLoc)
 	interactionIDs := make([]string, 0, len(fixtures))
 	for _, fix := range fixtures {
 		if id, alreadyExists := existingByRef[fix.transcriptRef]; alreadyExists {

@@ -52,13 +52,14 @@ func TestSeedDevDataIntegration(t *testing.T) {
 	// plumbing end to end, not a stand-in pipeline.
 	evaluator := evaluation.Service{
 		Detectors: []evaluation.NamedDetector{
-			{Code: "contact-hours", Detector: detection.ContactHoursDetector{
+			{Code: "MX-REDECO-04", Detector: detection.ContactHoursDetector{
 				Window: detection.Window{StartHour: 8, EndHour: 21},
 			}},
 			{Code: "MX-REDECO-06", Detector: detection.ThirdPartyContactDetector{}},
 			{Code: "MX-REDECO-07", Detector: detection.ProtectedPopulationDetector{}, RequiresHITL: true},
 			{Code: "MX-REDECO-11", Detector: detection.AuthorizedChannelDetector{}},
 			{Code: "MX-REDECO-10", Detector: detection.PaymentRoutingDetector{}},
+			{Code: "MX-REDECO-03", Detector: detection.DisclosureDetector{}},
 		},
 		Judges: []evaluation.NamedJudge{
 			{Code: "MX-REDECO-05", Judge: judge.FakeJudge{}},
@@ -127,9 +128,9 @@ func TestSeedDevDataIntegration(t *testing.T) {
 		t.Errorf("debtor timezone %q should be a valid IANA zone: %v", debtorTimezone, err)
 	}
 
-	// Assert exactly ten interaction events for this tenant (the fixture
+	// Assert exactly eleven interaction events for this tenant (the fixture
 	// transcript_refs, including the out-of-hours fixture, the
-	// threatening/neutral transcript fixtures (issue #4), and the four
+	// threatening/neutral transcript fixtures (issue #4), and the five
 	// issue #7 new-detector demo fixtures), each snapshotting the debtor's
 	// timezone (spec "Seeded interactions snapshot the debtor's timezone").
 	events, err := queries.ListInteractionEventsByTenant(ctx, tenant.ID)
@@ -147,9 +148,10 @@ func TestSeedDevDataIntegration(t *testing.T) {
 		"seed/demo/call-06-protected-minor":      false,
 		"seed/demo/call-07-unauthorized-channel": false,
 		"seed/demo/message-08-payment-routing":   false,
+		"seed/demo/call-09-disclosure-warn":      false,
 	}
 	var threateningID, neutralID pgtype.UUID
-	var compliantID, thirdPartyID, protectedMinorID, unauthorizedChannelID, paymentRoutingID pgtype.UUID
+	var compliantID, thirdPartyID, protectedMinorID, unauthorizedChannelID, paymentRoutingID, disclosureWarnID pgtype.UUID
 	for _, e := range events {
 		if e.TranscriptRef != nil {
 			fixtureRefs[*e.TranscriptRef] = true
@@ -161,8 +163,8 @@ func TestSeedDevDataIntegration(t *testing.T) {
 			case "seed/demo/call-01":
 				// The first fixture is compliant for every issue #7
 				// detector (relationship debtor, authorized channel,
-				// creditor recipient, adult DOB) — used below to prove the
-				// PASS path end to end.
+				// creditor recipient, adult DOB, disclosure stated) — used
+				// below to prove the PASS path end to end.
 				compliantID = e.ID
 			case "seed/demo/call-05-third-party":
 				thirdPartyID = e.ID
@@ -172,6 +174,8 @@ func TestSeedDevDataIntegration(t *testing.T) {
 				unauthorizedChannelID = e.ID
 			case "seed/demo/message-08-payment-routing":
 				paymentRoutingID = e.ID
+			case "seed/demo/call-09-disclosure-warn":
+				disclosureWarnID = e.ID
 			}
 		}
 		if e.DebtorTimezone != debtorTimezone {
@@ -183,8 +187,8 @@ func TestSeedDevDataIntegration(t *testing.T) {
 			t.Errorf("interaction event with transcript_ref %q not found after seed", ref)
 		}
 	}
-	if len(events) != 10 {
-		t.Errorf("interaction_events count = %d, want 10", len(events))
+	if len(events) != 11 {
+		t.Errorf("interaction_events count = %d, want 11", len(events))
 	}
 
 	// Assert the threatening seed transcript's interaction evaluates to a
@@ -238,12 +242,27 @@ func TestSeedDevDataIntegration(t *testing.T) {
 	}
 
 	// (a) The compliant fixture (relationship=debtor, its own channel
-	// authorized, recipient=creditor, adult DOB) PASSES all four new
-	// hard-block detectors.
-	for _, code := range []string{"MX-REDECO-06", "MX-REDECO-07", "MX-REDECO-11", "MX-REDECO-10"} {
+	// authorized, recipient=creditor, adult DOB, disclosure stated) PASSES
+	// all four new hard-block detectors AND the MX-REDECO-03 disclosure
+	// detector.
+	for _, code := range []string{"MX-REDECO-06", "MX-REDECO-07", "MX-REDECO-11", "MX-REDECO-10", "MX-REDECO-03"} {
 		if got := detectorOutcome(t, compliantID, code); got != "pass" {
 			t.Errorf("compliant fixture %s outcome = %q, want pass", code, got)
 		}
+	}
+
+	// The compliant fixture's OccurredAt is pinned inside the debtor-local
+	// contact-hours window (fixtureInstant, judgment-day round 1 fix), so
+	// its overall evaluation is now deterministically `pass` regardless of
+	// when this test actually runs.
+	var compliantOverallOutcome string
+	if err := pool.QueryRow(ctx, `
+		SELECT overall_outcome FROM evaluations WHERE interaction_event_id = $1
+	`, compliantID).Scan(&compliantOverallOutcome); err != nil {
+		t.Fatalf("read compliant interaction evaluation: %v", err)
+	}
+	if compliantOverallOutcome != "pass" {
+		t.Errorf("compliant interaction overall_outcome = %q, want pass", compliantOverallOutcome)
 	}
 
 	// (b) Each violation-demo fixture BLOCKs (persisted as "fail") on
@@ -259,6 +278,63 @@ func TestSeedDevDataIntegration(t *testing.T) {
 	}
 	if got := detectorOutcome(t, paymentRoutingID, "MX-REDECO-10"); got != "fail" {
 		t.Errorf("payment-routing demo fixture MX-REDECO-10 outcome = %q, want fail", got)
+	}
+
+	// (d) Issue #7 (MX-REDECO-03, warn-level): the disclosure-warn demo
+	// fixture — every hard-block detector input compliant, disclosure not
+	// stated, and OccurredAt pinned inside the contact-hours window
+	// (fixtureInstant, judgment-day round 1 fix) — proves the "warn-only
+	// interaction evaluation stays overall pass" spec scenario end to end
+	// against real Postgres: its MX-REDECO-03 detector_result_rows row is
+	// `warn`/`medium`, requires_hitl stays false (only MX-REDECO-07 sets
+	// it), and the evaluation's overall_outcome is deterministically
+	// `pass`. This complements (does not replace) the equivalent
+	// Service-level unit tests in internal/evaluation/service_test.go
+	// (PR2a) that prove the same fold logic with a fake EvaluationStore.
+	var disclosureWarnOutcome, disclosureWarnSeverity string
+	var disclosureWarnHITL bool
+	if err := pool.QueryRow(ctx, `
+		SELECT dr.outcome, dr.severity
+		FROM detector_result_rows dr
+		JOIN evaluations e ON e.id = dr.evaluation_id
+		WHERE e.interaction_event_id = $1 AND dr.detector_code = 'MX-REDECO-03'
+	`, disclosureWarnID).Scan(&disclosureWarnOutcome, &disclosureWarnSeverity); err != nil {
+		t.Fatalf("read disclosure-warn MX-REDECO-03 detector row: %v", err)
+	}
+	if disclosureWarnOutcome != "warn" {
+		t.Errorf("disclosure-warn demo fixture MX-REDECO-03 outcome = %q, want warn", disclosureWarnOutcome)
+	}
+	if disclosureWarnSeverity != "medium" {
+		t.Errorf("disclosure-warn demo fixture MX-REDECO-03 severity = %q, want medium", disclosureWarnSeverity)
+	}
+	var disclosureWarnOverallOutcome string
+	if err := pool.QueryRow(ctx, `
+		SELECT overall_outcome, requires_hitl FROM evaluations WHERE interaction_event_id = $1
+	`, disclosureWarnID).Scan(&disclosureWarnOverallOutcome, &disclosureWarnHITL); err != nil {
+		t.Fatalf("read disclosure-warn interaction evaluation: %v", err)
+	}
+	if disclosureWarnOverallOutcome != "pass" {
+		t.Errorf("disclosure-warn interaction overall_outcome = %q, want pass (a warn row alone must not flip overall outcome)", disclosureWarnOverallOutcome)
+	}
+	if disclosureWarnHITL {
+		t.Error("disclosure-warn interaction requires_hitl = true, want false")
+	}
+
+	// The third-party demo fixture also emits a coexisting MX-REDECO-03
+	// warn (disclosure not stated), proving a warn row coexisting with a
+	// hard-block row still yields overall fail, driven by the block (spec
+	// "A warn row coexisting with a hard-block row yields overall fail").
+	if got := detectorOutcome(t, thirdPartyID, "MX-REDECO-03"); got != "warn" {
+		t.Errorf("third-party demo fixture MX-REDECO-03 outcome = %q, want warn", got)
+	}
+	var thirdPartyOverallOutcome string
+	if err := pool.QueryRow(ctx, `
+		SELECT overall_outcome FROM evaluations WHERE interaction_event_id = $1
+	`, thirdPartyID).Scan(&thirdPartyOverallOutcome); err != nil {
+		t.Fatalf("read third-party interaction evaluation: %v", err)
+	}
+	if thirdPartyOverallOutcome != "fail" {
+		t.Errorf("third-party interaction overall_outcome = %q, want fail (driven by the MX-REDECO-06 block, not the coexisting warn)", thirdPartyOverallOutcome)
 	}
 
 	// The protected-population BLOCK must set requires_hitl=true on its
