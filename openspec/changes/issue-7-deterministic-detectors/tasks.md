@@ -70,11 +70,11 @@ Chain strategy: stacked-to-main
 
 ## Phase 3 (PR3): API Aggregate Endpoints
 
-- [ ] 3.1 Write `db/queries/dashboards.sql`: by-despacho (interaction-grain `total`/`violations`, unattributed bucket, tie-break by name), by-cause (`violations`+`warnings` per rule code); sqlc regen.
-- [ ] 3.2 Add `DashboardReader` interface + `internal/postgres/adapters.go` implementation using `tenantdb.WithTenantTx`.
-- [ ] 3.3 Add `GET /v1/dashboards/by-despacho` and `/by-cause` handlers to `internal/httpapi/httpapi.go`.
-- [ ] 3.4 [integration] Test: by-despacho ranking, unattributed bucket, tenant isolation (compliance-dashboards scenarios).
-- [ ] 3.5 [integration] Test: by-cause per-code breakdown, warnings-separate-from-violations, tenant isolation.
+- [x] 3.1 Write `db/queries/dashboards.sql`: by-despacho (interaction-grain `total`/`violations`, unattributed bucket, tie-break by name), by-cause (`violations`+`warnings` per rule code); sqlc regen.
+- [x] 3.2 Add `DashboardReader` interface + `internal/postgres/adapters.go` implementation using `tenantdb.WithTenantTx`.
+- [x] 3.3 Add `GET /v1/dashboards/by-despacho` and `/by-cause` handlers to `internal/httpapi/httpapi.go`.
+- [x] 3.4 [integration] Test: by-despacho ranking, unattributed bucket, tenant isolation (compliance-dashboards scenarios).
+- [x] 3.5 [integration] Test: by-cause per-code breakdown, warnings-separate-from-violations, tenant isolation.
 
 ## Phase 4 (PR4): Console Dashboards
 
