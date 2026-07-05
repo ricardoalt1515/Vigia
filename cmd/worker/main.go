@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ricardoalt1515/vigia/internal/config"
+	"github.com/ricardoalt1515/vigia/internal/orchestrator"
+	"github.com/ricardoalt1515/vigia/internal/postgres"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
-	"github.com/ricardoalt1515/vigia/internal/config"
 )
 
 func main() {
@@ -31,20 +33,19 @@ func run(ctx context.Context) error {
 	}
 	defer pool.Close()
 
+	store := postgres.NewComplaintCaseStoreFromPool(pool)
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &NoopWorker{})
+	river.AddWorker(workers, orchestrator.NewComplaintPollWorker(store, orchestrator.RiverContextTransitionEnqueuer{}, orchestrator.ComplaintJobSettings{}))
+	river.AddWorker(workers, orchestrator.NewComplaintTransitionWorker(store, orchestrator.ComplaintJobSettings{}))
 
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 1},
 		},
-		Workers: workers,
+		Workers:      workers,
+		PeriodicJobs: []*river.PeriodicJob{orchestrator.NewComplaintPeriodicJob()},
 	})
 	if err != nil {
-		return err
-	}
-
-	if _, err = client.Insert(ctx, NoopJob{}, nil); err != nil {
 		return err
 	}
 
