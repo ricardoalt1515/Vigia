@@ -34,16 +34,21 @@ func run(ctx context.Context) error {
 	defer pool.Close()
 
 	store := postgres.NewComplaintCaseStoreFromPool(pool)
+	reportStore := postgres.NewRedecoReportStoreFromPool(pool)
 	workers := river.NewWorkers()
 	river.AddWorker(workers, orchestrator.NewComplaintPollWorker(store, orchestrator.RiverContextTransitionEnqueuer{}, orchestrator.ComplaintJobSettings{}))
 	river.AddWorker(workers, orchestrator.NewComplaintTransitionWorker(store, orchestrator.ComplaintJobSettings{}))
+	river.AddWorker(workers, orchestrator.NewRedecoMonthlyReportWorker(reportStore, orchestrator.ComplaintJobSettings{}))
 
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
 			river.QueueDefault: {MaxWorkers: 1},
 		},
-		Workers:      workers,
-		PeriodicJobs: []*river.PeriodicJob{orchestrator.NewComplaintPeriodicJob()},
+		Workers: workers,
+		PeriodicJobs: []*river.PeriodicJob{
+			orchestrator.NewComplaintPeriodicJob(),
+			orchestrator.NewRedecoMonthlyReportPeriodicJob(),
+		},
 	})
 	if err != nil {
 		return err

@@ -54,6 +54,7 @@ func run(ctx context.Context) error {
 	evidence := postgres.NewEvidenceReaderFromPool(pool)
 	dashboards := postgres.NewDashboardReaderFromPool(pool)
 	complaints := postgres.NewComplaintCaseStoreFromPool(pool)
+	reports := postgres.NewRedecoReportStoreFromPool(pool)
 
 	// reevaluator reruns the same wired detectors/judge ReEvaluateInteraction
 	// promises to be reproducible against (issue #6): it MUST mirror
@@ -79,7 +80,7 @@ func run(ctx context.Context) error {
 		Bundles:      postgres.NewBundleVersionResolverAdapterFromPool(pool),
 	}
 
-	server := httpapi.NewServer(auth.NewAuthenticator(keyStore, time.Now), reader, summary, evidence, reevaluator, dashboards, complaints)
+	server := httpapi.NewServer(auth.NewAuthenticator(keyStore, time.Now), reader, summary, evidence, reevaluator, dashboards, complaints, reports)
 
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {

@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,6 +112,10 @@ type ComplaintWorkflow interface {
 	ListBusinessDayHolidays(ctx context.Context, version string) ([]orchestrator.HolidayRow, error)
 }
 
+type RedecoMonthlyReporter interface {
+	GenerateRedecoMonthlyReport(ctx context.Context, tenantID string, period orchestrator.RedecoReportPeriod) (orchestrator.RedecoMonthlyReport, error)
+}
+
 type CreateHumanReviewInput = orchestrator.CreateHumanReviewInput
 
 type HumanReview = orchestrator.HumanReview
@@ -129,11 +135,16 @@ type Server struct {
 	reevaluator   ReEvaluator
 	dashboards    DashboardReader
 	complaints    ComplaintWorkflow
+	reports       RedecoMonthlyReporter
 	now           func() time.Time
 	mux           *http.ServeMux
 }
 
-func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader, evidence EvidenceReader, reevaluator ReEvaluator, dashboards DashboardReader, complaints ComplaintWorkflow) *Server {
+func NewServer(authenticator *auth.Authenticator, interactions InteractionReader, summary SummaryReader, evidence EvidenceReader, reevaluator ReEvaluator, dashboards DashboardReader, complaints ComplaintWorkflow, reports ...RedecoMonthlyReporter) *Server {
+	var reportService RedecoMonthlyReporter
+	if len(reports) > 0 {
+		reportService = reports[0]
+	}
 	s := &Server{
 		authenticator: authenticator,
 		interactions:  interactions,
@@ -142,6 +153,7 @@ func NewServer(authenticator *auth.Authenticator, interactions InteractionReader
 		reevaluator:   reevaluator,
 		dashboards:    dashboards,
 		complaints:    complaints,
+		reports:       reportService,
 		now:           time.Now,
 		mux:           http.NewServeMux(),
 	}
@@ -151,6 +163,7 @@ func NewServer(authenticator *auth.Authenticator, interactions InteractionReader
 	s.mux.HandleFunc("POST /v1/interactions/{id}/reevaluate", s.handleReEvaluate)
 	s.mux.HandleFunc("GET /v1/dashboards/by-despacho", s.handleGetDashboardByDespacho)
 	s.mux.HandleFunc("GET /v1/dashboards/by-cause", s.handleGetDashboardByCause)
+	s.mux.HandleFunc("GET /v1/reports/redeco-monthly.csv", s.handleGetRedecoMonthlyReport)
 	s.mux.HandleFunc("POST /v1/complaints", s.handleCreateComplaint)
 	s.mux.HandleFunc("POST /v1/complaints/{id}/reviews", s.handleCreateComplaintReview)
 	return s
@@ -158,6 +171,45 @@ func NewServer(authenticator *auth.Authenticator, interactions InteractionReader
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
+}
+
+func (s *Server) handleGetRedecoMonthlyReport(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	if s.reports == nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	year, err := strconv.Atoi(r.URL.Query().Get("year"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	month, err := strconv.Atoi(r.URL.Query().Get("month"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	period, err := orchestrator.NewRedecoReportPeriod(year, time.Month(month))
+	if err != nil {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	report, err := s.reports.GenerateRedecoMonthlyReport(r.Context(), tenant.TenantID, period)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=redeco-monthly-"+strconv.Itoa(year)+"-"+strconv.Itoa(month)+".csv")
+	http.ServeContent(w, r, "redeco-monthly.csv", time.Time{}, bytes.NewReader(report.CSV))
 }
 
 type createComplaintRequest struct {

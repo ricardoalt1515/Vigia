@@ -886,6 +886,62 @@ func TestComplaintEndpoints(t *testing.T) {
 	})
 }
 
+func TestGetRedecoMonthlyReportCSV(t *testing.T) {
+	fixedTime := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeKeyStore{records: map[string]auth.TenantAPIKey{
+		auth.HashAPIKey("tenant-a-key"): {
+			ID:       "key-a",
+			TenantID: "tenant-a",
+			KeyHash:  auth.HashAPIKey("tenant-a-key"),
+			Status:   auth.StatusActive,
+		},
+	}}
+	reports := &fakeRedecoMonthlyReporter{report: orchestrator.RedecoMonthlyReport{CSV: []byte("channel,cause,status,resolution,penalization\nphone,MX-REDECO-05,escalated,escalated,penalized\n")}}
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), &fakeInteractionReader{}, &fakeSummaryReader{}, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{}, nil, reports)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/reports/redeco-monthly.csv?year=2026&month=6", nil)
+	req.Header.Set("Authorization", "Bearer tenant-a-key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/csv; charset=utf-8" {
+		t.Fatalf("content-type = %q", got)
+	}
+	if reports.tenantID != "tenant-a" {
+		t.Fatalf("tenantID = %q, want tenant-a", reports.tenantID)
+	}
+	if reports.period.Year != 2026 || reports.period.Month != time.June {
+		t.Fatalf("period = %04d-%02d, want 2026-06", reports.period.Year, reports.period.Month)
+	}
+	if !strings.Contains(rec.Body.String(), "penalized") {
+		t.Fatalf("body %q does not contain CSV report", rec.Body.String())
+	}
+
+	badReq := httptest.NewRequest(http.MethodGet, "/v1/reports/redeco-monthly.csv?year=2026&month=13", nil)
+	badReq.Header.Set("Authorization", "Bearer tenant-a-key")
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid month status = %d, want %d", badRec.Code, http.StatusBadRequest)
+	}
+}
+
+type fakeRedecoMonthlyReporter struct {
+	report   orchestrator.RedecoMonthlyReport
+	tenantID string
+	period   orchestrator.RedecoReportPeriod
+}
+
+func (f *fakeRedecoMonthlyReporter) GenerateRedecoMonthlyReport(ctx context.Context, tenantID string, period orchestrator.RedecoReportPeriod) (orchestrator.RedecoMonthlyReport, error) {
+	f.tenantID = tenantID
+	f.period = period
+	return f.report, nil
+}
+
 type fakeComplaintWorkflow struct {
 	holidays      []orchestrator.HolidayRow
 	createResults []orchestrator.ComplaintCase
