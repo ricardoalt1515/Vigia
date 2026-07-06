@@ -104,6 +104,20 @@ type Despacho struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type DespachoPenalization struct {
+	ID              pgtype.UUID        `json:"id"`
+	TenantID        pgtype.UUID        `json:"tenant_id"`
+	DespachoID      pgtype.UUID        `json:"despacho_id"`
+	ComplaintCaseID pgtype.UUID        `json:"complaint_case_id"`
+	PeriodYear      int32              `json:"period_year"`
+	PeriodMonth     int32              `json:"period_month"`
+	Penalization    string             `json:"penalization"`
+	Resolution      string             `json:"resolution"`
+	SourceState     string             `json:"source_state"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type DetectorResultRow struct {
 	ID                 pgtype.UUID        `json:"id"`
 	TenantID           pgtype.UUID        `json:"tenant_id"`

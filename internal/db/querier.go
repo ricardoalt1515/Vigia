@@ -57,6 +57,7 @@ type Querier interface {
 	// against the FROM-list instead and fails with "column ... does not exist"
 	// since no such source column exists.
 	DashboardByDespacho(ctx context.Context) ([]DashboardByDespachoRow, error)
+	DeleteDespachoPenalizationsForPeriod(ctx context.Context, arg DeleteDespachoPenalizationsForPeriodParams) error
 	// Resolves THE active bundle for a tenant (Design Decision 3/4): today's
 	// BundleResolver seam resolves per-tenant only, with no bundle "name" input.
 	// If a tenant were to ever activate more than one named bundle
@@ -99,6 +100,7 @@ type Querier interface {
 	// detector/judge result never fans out the interaction row.
 	ListCurrentTenantInteractionsWithOutcome(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsWithOutcomeRow, error)
 	ListDebtorsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDebtorsByTenantRow, error)
+	ListDespachoPenalizationsForPeriod(ctx context.Context, arg ListDespachoPenalizationsForPeriodParams) ([]DespachoPenalization, error)
 	ListDespachosByTenant(ctx context.Context, tenantID pgtype.UUID) ([]Despacho, error)
 	// Package detector layer for evidence export, sorted by detector_code.
 	ListDetectorResultRowsByEvaluation(ctx context.Context, evaluationID pgtype.UUID) ([]ListDetectorResultRowsByEvaluationRow, error)
@@ -109,6 +111,7 @@ type Querier interface {
 	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListInteractionEventsByTenantRow, error)
 	ListOpenComplaintCases(ctx context.Context, arg ListOpenComplaintCasesParams) ([]ComplaintCase, error)
 	ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListPolicyBundleRulesByTenantRow, error)
+	ListRedecoMonthlyReportEntries(ctx context.Context, arg ListRedecoMonthlyReportEntriesParams) ([]ListRedecoMonthlyReportEntriesRow, error)
 	ListSLADueComplaintCases(ctx context.Context, arg ListSLADueComplaintCasesParams) ([]ComplaintCase, error)
 	ListTenantAPIKeysByTenant(ctx context.Context, tenantID pgtype.UUID) ([]TenantApiKey, error)
 	ListUnprocessedHumanReviews(ctx context.Context, arg ListUnprocessedHumanReviewsParams) ([]HumanReview, error)
@@ -133,6 +136,7 @@ type Querier interface {
 	TransitionComplaintCaseToEscalated(ctx context.Context, arg TransitionComplaintCaseToEscalatedParams) (ComplaintCase, error)
 	TransitionComplaintCaseToResolved(ctx context.Context, arg TransitionComplaintCaseToResolvedParams) (ComplaintCase, error)
 	UpdateChainHead(ctx context.Context, arg UpdateChainHeadParams) error
+	UpsertDespachoPenalization(ctx context.Context, arg UpsertDespachoPenalizationParams) (DespachoPenalization, error)
 	// Idempotent catalog seeding (issue #7 Design Decision "catalog + bundle
 	// seeding idempotency"): policy_rules.code is UNIQUE, so a plain
 	// CreatePolicyRule would fail on re-seed. ON CONFLICT (code) DO UPDATE keeps
