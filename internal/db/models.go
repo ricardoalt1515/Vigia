@@ -59,6 +59,31 @@ func (ns NullRiverJobState) Value() (driver.Value, error) {
 	return string(ns.RiverJobState), nil
 }
 
+type BusinessDayHoliday struct {
+	ID              pgtype.UUID        `json:"id"`
+	CalendarVersion string             `json:"calendar_version"`
+	HolidayDate     pgtype.Date        `json:"holiday_date"`
+	Label           string             `json:"label"`
+	SourceNote      string             `json:"source_note"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type ComplaintCase struct {
+	ID              pgtype.UUID        `json:"id"`
+	TenantID        pgtype.UUID        `json:"tenant_id"`
+	InteractionID   pgtype.UUID        `json:"interaction_id"`
+	RedecoCause     string             `json:"redeco_cause"`
+	State           string             `json:"state"`
+	OpenedAt        pgtype.Timestamptz `json:"opened_at"`
+	SlaDueAt        pgtype.Timestamptz `json:"sla_due_at"`
+	CalendarVersion string             `json:"calendar_version"`
+	ReviewExpiresAt pgtype.Timestamptz `json:"review_expires_at"`
+	ResolvedAt      pgtype.Timestamptz `json:"resolved_at"`
+	IdempotencyKey  string             `json:"idempotency_key"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Debtor struct {
 	ID          pgtype.UUID        `json:"id"`
 	TenantID    pgtype.UUID        `json:"tenant_id"`
@@ -121,6 +146,25 @@ type EvidenceRecord struct {
 	JudgeRubricVersion  *string            `json:"judge_rubric_version"`
 	JudgeModelID        *string            `json:"judge_model_id"`
 	JudgeConfidence     *string            `json:"judge_confidence"`
+	RecordKind          string             `json:"record_kind"`
+	ComplaintCaseID     pgtype.UUID        `json:"complaint_case_id"`
+	TransitionKind      *string            `json:"transition_kind"`
+	TransitionFromState *string            `json:"transition_from_state"`
+	TransitionToState   *string            `json:"transition_to_state"`
+	HumanReviewID       pgtype.UUID        `json:"human_review_id"`
+}
+
+type HumanReview struct {
+	ID              pgtype.UUID        `json:"id"`
+	TenantID        pgtype.UUID        `json:"tenant_id"`
+	ComplaintCaseID pgtype.UUID        `json:"complaint_case_id"`
+	Decision        string             `json:"decision"`
+	Reviewer        string             `json:"reviewer"`
+	Notes           string             `json:"notes"`
+	ProcessedAt     pgtype.Timestamptz `json:"processed_at"`
+	SupersededAt    pgtype.Timestamptz `json:"superseded_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
 type InteractionEvent struct {

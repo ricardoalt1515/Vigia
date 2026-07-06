@@ -16,6 +16,7 @@ type Querier interface {
 	// bundle name, not globally per tenant.
 	CountBundleVersions(ctx context.Context, arg CountBundleVersionsParams) (int64, error)
 	CountOutOfHoursEvaluations(ctx context.Context) (int64, error)
+	CreateComplaintCase(ctx context.Context, arg CreateComplaintCaseParams) (ComplaintCase, error)
 	// date_of_birth (issue #7) is the durable DOB source, snapshotted onto
 	// interaction_events.contacted_party_dob at ingest time by the caller.
 	CreateDebtor(ctx context.Context, arg CreateDebtorParams) (CreateDebtorRow, error)
@@ -62,6 +63,8 @@ type Querier interface {
 	// simultaneously this returns a SQL "too many rows" error rather than
 	// silently picking one; that constraint is out of scope for issue #6.
 	GetActiveBundleByTenant(ctx context.Context, tenantID pgtype.UUID) (PolicyBundle, error)
+	GetComplaintCase(ctx context.Context, arg GetComplaintCaseParams) (ComplaintCase, error)
+	GetComplaintCaseByIdempotencyKey(ctx context.Context, arg GetComplaintCaseByIdempotencyKeyParams) (ComplaintCase, error)
 	GetDebtorByTenant(ctx context.Context, arg GetDebtorByTenantParams) (GetDebtorByTenantRow, error)
 	GetDespachoByTenant(ctx context.Context, arg GetDespachoByTenantParams) (Despacho, error)
 	// Used by cmd/seed to detect whether a pre-existing (re-run) interaction
@@ -82,7 +85,11 @@ type Querier interface {
 	GetPolicyBundleByID(ctx context.Context, arg GetPolicyBundleByIDParams) (PolicyBundle, error)
 	GetTenantAPIKeyByHash(ctx context.Context, keyHash string) (TenantApiKey, error)
 	GetTenantBySlug(ctx context.Context, slug string) (Tenant, error)
+	GetUnprocessedHumanReviewForCase(ctx context.Context, arg GetUnprocessedHumanReviewForCaseParams) (HumanReview, error)
+	InsertComplaintTransitionEvidenceRecord(ctx context.Context, arg InsertComplaintTransitionEvidenceRecordParams) (EvidenceRecord, error)
 	InsertEvidenceRecord(ctx context.Context, arg InsertEvidenceRecordParams) (EvidenceRecord, error)
+	InsertHumanReview(ctx context.Context, arg InsertHumanReviewParams) (HumanReview, error)
+	ListBusinessDayHolidaysByVersion(ctx context.Context, calendarVersion string) ([]ListBusinessDayHolidaysByVersionRow, error)
 	ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsRow, error)
 	// Issue #4 rewrite: aggregates across detector_result_rows per evaluation
 	// (worst-severity-wins for the displayed reason, bool_or threat_flagged for
@@ -98,9 +105,13 @@ type Querier interface {
 	ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDetectorResultRowsByTenantRow, error)
 	// Store-backed VerifyChain: replay a tenant's chain ordered by seq.
 	ListEvidenceRecordsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]EvidenceRecord, error)
+	ListExpiredReviewComplaintCases(ctx context.Context, arg ListExpiredReviewComplaintCasesParams) ([]ComplaintCase, error)
 	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListInteractionEventsByTenantRow, error)
+	ListOpenComplaintCases(ctx context.Context, arg ListOpenComplaintCasesParams) ([]ComplaintCase, error)
 	ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListPolicyBundleRulesByTenantRow, error)
+	ListSLADueComplaintCases(ctx context.Context, arg ListSLADueComplaintCasesParams) ([]ComplaintCase, error)
 	ListTenantAPIKeysByTenant(ctx context.Context, tenantID pgtype.UUID) ([]TenantApiKey, error)
+	ListUnprocessedHumanReviews(ctx context.Context, arg ListUnprocessedHumanReviewsParams) ([]HumanReview, error)
 	// CreateBundleVersion's serialization point (Design Decision 6): locks the
 	// prior active row scoped to (tenant_id, name) so two concurrent
 	// CreateBundleVersion calls for the same bundle name never both supersede
@@ -111,11 +122,16 @@ type Querier interface {
 	// Insert-or-lock: first append inserts the genesis head; later appends take the
 	// row lock via the no-op self-update. Either way returns the locked head.
 	LockChainHead(ctx context.Context, arg LockChainHeadParams) (LockChainHeadRow, error)
+	MarkOtherHumanReviewsSuperseded(ctx context.Context, arg MarkOtherHumanReviewsSupersededParams) (int64, error)
+	MarkWinningHumanReviewProcessed(ctx context.Context, arg MarkWinningHumanReviewProcessedParams) (HumanReview, error)
 	// Status-only update along the allowed active->superseded transition (the
 	// one carve-out policy_bundles_guard_mutation permits). MUST run before the
 	// new active row is inserted: the partial unique index
 	// policy_bundles_one_active_per_tenant_name is non-deferrable.
 	SupersedePolicyBundle(ctx context.Context, arg SupersedePolicyBundleParams) error
+	TransitionComplaintCaseToAwaitingReview(ctx context.Context, arg TransitionComplaintCaseToAwaitingReviewParams) (ComplaintCase, error)
+	TransitionComplaintCaseToEscalated(ctx context.Context, arg TransitionComplaintCaseToEscalatedParams) (ComplaintCase, error)
+	TransitionComplaintCaseToResolved(ctx context.Context, arg TransitionComplaintCaseToResolvedParams) (ComplaintCase, error)
 	UpdateChainHead(ctx context.Context, arg UpdateChainHeadParams) error
 	// Idempotent catalog seeding (issue #7 Design Decision "catalog + bundle
 	// seeding idempotency"): policy_rules.code is UNIQUE, so a plain

@@ -14,7 +14,8 @@ import (
 const getEvidenceRecordByInteraction = `-- name: GetEvidenceRecordByInteraction :one
 SELECT id, tenant_id, interaction_event_id, evaluation_id, seq, prev_hash, hash,
     overall_outcome, policy_bundle_version, inputs_digest, created_at,
-    judge_rubric_version, judge_model_id, judge_confidence
+    judge_rubric_version, judge_model_id, judge_confidence, record_kind,
+    complaint_case_id, transition_kind, transition_from_state, transition_to_state, human_review_id
 FROM evidence_records WHERE tenant_id = $1 AND interaction_event_id = $2
 `
 
@@ -42,6 +43,80 @@ func (q *Queries) GetEvidenceRecordByInteraction(ctx context.Context, arg GetEvi
 		&i.JudgeRubricVersion,
 		&i.JudgeModelID,
 		&i.JudgeConfidence,
+		&i.RecordKind,
+		&i.ComplaintCaseID,
+		&i.TransitionKind,
+		&i.TransitionFromState,
+		&i.TransitionToState,
+		&i.HumanReviewID,
+	)
+	return i, err
+}
+
+const insertComplaintTransitionEvidenceRecord = `-- name: InsertComplaintTransitionEvidenceRecord :one
+INSERT INTO evidence_records (tenant_id, interaction_event_id, evaluation_id, seq,
+    prev_hash, hash, overall_outcome, policy_bundle_version, inputs_digest, created_at,
+    record_kind, complaint_case_id, transition_kind, transition_from_state, transition_to_state,
+    human_review_id)
+VALUES ($1,NULL,NULL,$2,$3,$4,$5,'',$6,$7,'complaint_transition',$8,$9,$10,$11,$12)
+RETURNING id, tenant_id, interaction_event_id, evaluation_id, seq, prev_hash, hash,
+    overall_outcome, policy_bundle_version, inputs_digest, created_at,
+    judge_rubric_version, judge_model_id, judge_confidence, record_kind,
+    complaint_case_id, transition_kind, transition_from_state, transition_to_state, human_review_id
+`
+
+type InsertComplaintTransitionEvidenceRecordParams struct {
+	TenantID            pgtype.UUID        `json:"tenant_id"`
+	Seq                 int64              `json:"seq"`
+	PrevHash            string             `json:"prev_hash"`
+	Hash                string             `json:"hash"`
+	OverallOutcome      string             `json:"overall_outcome"`
+	InputsDigest        string             `json:"inputs_digest"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	ComplaintCaseID     pgtype.UUID        `json:"complaint_case_id"`
+	TransitionKind      *string            `json:"transition_kind"`
+	TransitionFromState *string            `json:"transition_from_state"`
+	TransitionToState   *string            `json:"transition_to_state"`
+	HumanReviewID       pgtype.UUID        `json:"human_review_id"`
+}
+
+func (q *Queries) InsertComplaintTransitionEvidenceRecord(ctx context.Context, arg InsertComplaintTransitionEvidenceRecordParams) (EvidenceRecord, error) {
+	row := q.db.QueryRow(ctx, insertComplaintTransitionEvidenceRecord,
+		arg.TenantID,
+		arg.Seq,
+		arg.PrevHash,
+		arg.Hash,
+		arg.OverallOutcome,
+		arg.InputsDigest,
+		arg.CreatedAt,
+		arg.ComplaintCaseID,
+		arg.TransitionKind,
+		arg.TransitionFromState,
+		arg.TransitionToState,
+		arg.HumanReviewID,
+	)
+	var i EvidenceRecord
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.InteractionEventID,
+		&i.EvaluationID,
+		&i.Seq,
+		&i.PrevHash,
+		&i.Hash,
+		&i.OverallOutcome,
+		&i.PolicyBundleVersion,
+		&i.InputsDigest,
+		&i.CreatedAt,
+		&i.JudgeRubricVersion,
+		&i.JudgeModelID,
+		&i.JudgeConfidence,
+		&i.RecordKind,
+		&i.ComplaintCaseID,
+		&i.TransitionKind,
+		&i.TransitionFromState,
+		&i.TransitionToState,
+		&i.HumanReviewID,
 	)
 	return i, err
 }
@@ -49,11 +124,12 @@ func (q *Queries) GetEvidenceRecordByInteraction(ctx context.Context, arg GetEvi
 const insertEvidenceRecord = `-- name: InsertEvidenceRecord :one
 INSERT INTO evidence_records (tenant_id, interaction_event_id, evaluation_id, seq,
     prev_hash, hash, overall_outcome, policy_bundle_version, inputs_digest, created_at,
-    judge_rubric_version, judge_model_id, judge_confidence)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    judge_rubric_version, judge_model_id, judge_confidence, record_kind)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'evaluation')
 RETURNING id, tenant_id, interaction_event_id, evaluation_id, seq, prev_hash, hash,
     overall_outcome, policy_bundle_version, inputs_digest, created_at,
-    judge_rubric_version, judge_model_id, judge_confidence
+    judge_rubric_version, judge_model_id, judge_confidence, record_kind,
+    complaint_case_id, transition_kind, transition_from_state, transition_to_state, human_review_id
 `
 
 type InsertEvidenceRecordParams struct {
@@ -104,6 +180,12 @@ func (q *Queries) InsertEvidenceRecord(ctx context.Context, arg InsertEvidenceRe
 		&i.JudgeRubricVersion,
 		&i.JudgeModelID,
 		&i.JudgeConfidence,
+		&i.RecordKind,
+		&i.ComplaintCaseID,
+		&i.TransitionKind,
+		&i.TransitionFromState,
+		&i.TransitionToState,
+		&i.HumanReviewID,
 	)
 	return i, err
 }
@@ -149,7 +231,8 @@ func (q *Queries) ListDetectorResultRowsByEvaluation(ctx context.Context, evalua
 const listEvidenceRecordsByTenant = `-- name: ListEvidenceRecordsByTenant :many
 SELECT id, tenant_id, interaction_event_id, evaluation_id, seq, prev_hash, hash,
     overall_outcome, policy_bundle_version, inputs_digest, created_at,
-    judge_rubric_version, judge_model_id, judge_confidence
+    judge_rubric_version, judge_model_id, judge_confidence, record_kind,
+    complaint_case_id, transition_kind, transition_from_state, transition_to_state, human_review_id
 FROM evidence_records WHERE tenant_id = $1 ORDER BY seq ASC
 `
 
@@ -178,6 +261,12 @@ func (q *Queries) ListEvidenceRecordsByTenant(ctx context.Context, tenantID pgty
 			&i.JudgeRubricVersion,
 			&i.JudgeModelID,
 			&i.JudgeConfidence,
+			&i.RecordKind,
+			&i.ComplaintCaseID,
+			&i.TransitionKind,
+			&i.TransitionFromState,
+			&i.TransitionToState,
+			&i.HumanReviewID,
 		); err != nil {
 			return nil, err
 		}

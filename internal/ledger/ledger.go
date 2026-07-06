@@ -43,6 +43,18 @@ type JudgeEvidence struct {
 	Confidence    string `json:"confidence"`
 }
 
+// ComplaintTransitionEvidence binds complaint workflow state transitions into
+// the same hash-chain body used for evaluation evidence. It is optional and
+// trailing on Body, so evaluation-only records keep their existing canonical
+// bytes when nil.
+type ComplaintTransitionEvidence struct {
+	ComplaintCaseID string  `json:"complaint_case_id"`
+	TransitionKind  string  `json:"transition_kind"`
+	FromState       string  `json:"from_state"`
+	ToState         string  `json:"to_state"`
+	HumanReviewID   *string `json:"human_review_id,omitempty"`
+}
+
 // Body is the hashed content of a record. FIELD ORDER IS LOAD-BEARING:
 // encoding/json emits struct fields in declaration order, and that order is
 // baked into every stored hash. Do not reorder, add, or remove fields
@@ -54,15 +66,16 @@ type JudgeEvidence struct {
 // omitempty on a nil pointer omits the key entirely, never emitting
 // "judge":null.
 type Body struct {
-	TenantID            string         `json:"tenant_id"`
-	InteractionEventID  string         `json:"interaction_event_id"`
-	EvaluationID        string         `json:"evaluation_id"`
-	Seq                 int64          `json:"seq"`
-	OverallOutcome      string         `json:"overall_outcome"`
-	PolicyBundleVersion string         `json:"policy_bundle_version"`
-	InputsDigest        string         `json:"inputs_digest"`
-	CreatedAt           time.Time      `json:"created_at"`
-	Judge               *JudgeEvidence `json:"judge,omitempty"`
+	TenantID            string                       `json:"tenant_id"`
+	InteractionEventID  string                       `json:"interaction_event_id"`
+	EvaluationID        string                       `json:"evaluation_id"`
+	Seq                 int64                        `json:"seq"`
+	OverallOutcome      string                       `json:"overall_outcome"`
+	PolicyBundleVersion string                       `json:"policy_bundle_version"`
+	InputsDigest        string                       `json:"inputs_digest"`
+	CreatedAt           time.Time                    `json:"created_at"`
+	Judge               *JudgeEvidence               `json:"judge,omitempty"`
+	ComplaintTransition *ComplaintTransitionEvidence `json:"complaint_transition,omitempty"`
 }
 
 // EvidenceRecord is a persisted, hashed ledger entry.
@@ -80,15 +93,16 @@ type EvidenceRecord struct {
 // nil *JudgeEvidence entirely, so judge-less bodies serialize identically
 // to their pre-#4 shape.
 type canonicalBodyDTO struct {
-	TenantID            string         `json:"tenant_id"`
-	InteractionEventID  string         `json:"interaction_event_id"`
-	EvaluationID        string         `json:"evaluation_id"`
-	Seq                 int64          `json:"seq"`
-	OverallOutcome      string         `json:"overall_outcome"`
-	PolicyBundleVersion string         `json:"policy_bundle_version"`
-	InputsDigest        string         `json:"inputs_digest"`
-	CreatedAt           string         `json:"created_at"`
-	Judge               *JudgeEvidence `json:"judge,omitempty"`
+	TenantID            string                       `json:"tenant_id"`
+	InteractionEventID  string                       `json:"interaction_event_id"`
+	EvaluationID        string                       `json:"evaluation_id"`
+	Seq                 int64                        `json:"seq"`
+	OverallOutcome      string                       `json:"overall_outcome"`
+	PolicyBundleVersion string                       `json:"policy_bundle_version"`
+	InputsDigest        string                       `json:"inputs_digest"`
+	CreatedAt           string                       `json:"created_at"`
+	Judge               *JudgeEvidence               `json:"judge,omitempty"`
+	ComplaintTransition *ComplaintTransitionEvidence `json:"complaint_transition,omitempty"`
 }
 
 // canonicalBody marshals Body deterministically. created_at is rendered by a
@@ -105,6 +119,7 @@ func canonicalBody(b Body) []byte {
 		InputsDigest:        b.InputsDigest,
 		CreatedAt:           b.CreatedAt.UTC().Format(canonicalTimeLayout),
 		Judge:               b.Judge,
+		ComplaintTransition: b.ComplaintTransition,
 	}
 	// encoding/json marshals struct fields in declaration order; the error
 	// path here is unreachable for this DTO (no channels/funcs/cyclic types).
