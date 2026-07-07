@@ -14,8 +14,11 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/auth"
 	"github.com/ricardoalt1515/vigia/internal/core"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
+	"github.com/ricardoalt1515/vigia/internal/harness"
+	"github.com/ricardoalt1515/vigia/internal/harness/outboundgate"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
 	"github.com/ricardoalt1515/vigia/internal/orchestrator"
+	"github.com/ricardoalt1515/vigia/internal/outbound"
 )
 
 // Interaction is the API DTO for GET /v1/interactions. Outcome, Reason,
@@ -116,6 +119,14 @@ type RedecoMonthlyReporter interface {
 	GenerateRedecoMonthlyReport(ctx context.Context, tenantID string, period orchestrator.RedecoReportPeriod) (orchestrator.RedecoMonthlyReport, error)
 }
 
+type CampaignPreflightRunner interface {
+	Run(ctx context.Context, campaign outbound.CampaignArtifact) (outbound.PreflightBrief, error)
+}
+
+type OutboundDecisionRunner interface {
+	Decide(ctx context.Context, req outbound.DecisionRequest) (outbound.Decision, error)
+}
+
 type CreateHumanReviewInput = orchestrator.CreateHumanReviewInput
 
 type HumanReview = orchestrator.HumanReview
@@ -136,6 +147,9 @@ type Server struct {
 	dashboards    DashboardReader
 	complaints    ComplaintWorkflow
 	reports       RedecoMonthlyReporter
+	preflight     CampaignPreflightRunner
+	outbound      OutboundDecisionRunner
+	outboundRec   outbound.DecisionRecorder
 	now           func() time.Time
 	mux           *http.ServeMux
 }
@@ -166,11 +180,170 @@ func NewServer(authenticator *auth.Authenticator, interactions InteractionReader
 	s.mux.HandleFunc("GET /v1/reports/redeco-monthly.csv", s.handleGetRedecoMonthlyReport)
 	s.mux.HandleFunc("POST /v1/complaints", s.handleCreateComplaint)
 	s.mux.HandleFunc("POST /v1/complaints/{id}/reviews", s.handleCreateComplaintReview)
+	s.mux.HandleFunc("POST /v1/campaigns/preflight", s.handleCampaignPreflight)
+	s.mux.HandleFunc("POST /v1/outbound/guardrails/decide", s.handleOutboundGuardrailDecision)
 	return s
+}
+
+func (s *Server) SetCampaignPreflight(preflight CampaignPreflightRunner) {
+	s.preflight = preflight
+}
+
+func (s *Server) SetOutboundGuardrails(decider OutboundDecisionRunner, recorder outbound.DecisionRecorder) {
+	s.outbound = decider
+	s.outboundRec = recorder
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
+}
+
+type outboundGuardrailDecisionRequest map[string]any
+
+type outboundGuardrailDecisionResponse struct {
+	Decision string         `json:"decision"`
+	Reason   string         `json:"reason"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+func (s *Server) handleOutboundGuardrailDecision(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	if s.outbound == nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	var input outboundGuardrailDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	gate := outboundgate.NewGate(outboundgate.Config{
+		TenantID:  tenant.TenantID,
+		ActorID:   tenant.KeyID,
+		Decider:   s.outbound,
+		Recorder:  s.outboundRec,
+		RequestID: stringValueFromMap(input, "proposal_id"),
+	})
+	decision := gate.Decide(r.Context(), harness.ToolCall{Name: "send_outbound_utterance", Input: map[string]any(input)})
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(outboundGuardrailDecisionResponse{Decision: string(decision.Kind), Reason: decision.Reason, Metadata: decision.Metadata}); err != nil {
+		return
+	}
+}
+
+func stringValueFromMap(input map[string]any, key string) string {
+	value, _ := input[key].(string)
+	return value
+}
+
+type campaignPreflightRequest struct {
+	CampaignID string                     `json:"campaign_id"`
+	Name       string                     `json:"name"`
+	ActorID    string                     `json:"actor_id"`
+	Audience   []campaignRecipientRequest `json:"audience"`
+	Steps      []campaignStepRequest      `json:"steps"`
+	Schedule   campaignScheduleRequest    `json:"schedule"`
+}
+
+type campaignRecipientRequest struct {
+	RecipientRef string   `json:"recipient_ref"`
+	DebtorID     string   `json:"debtor_id"`
+	Relationship string   `json:"relationship"`
+	ChannelRefs  []string `json:"channel_refs"`
+	Timezone     string   `json:"timezone"`
+}
+
+type campaignStepRequest struct {
+	StepID            string `json:"step_id"`
+	TemplateID        string `json:"template_id"`
+	Channel           string `json:"channel"`
+	TextTemplate      string `json:"text_template"`
+	SendOffsetMinutes int64  `json:"send_offset_minutes"`
+	PaymentTarget     string `json:"payment_target"`
+}
+
+type campaignScheduleRequest struct {
+	StartsAt string `json:"starts_at"`
+	Timezone string `json:"timezone"`
+}
+
+func (s *Server) handleCampaignPreflight(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	if s.preflight == nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	var req campaignPreflightRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	campaign, err := req.toDomain(tenant)
+	if err != nil {
+		writeError(w, http.StatusBadRequest)
+		return
+	}
+	brief, err := s.preflight.Run(r.Context(), campaign)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(brief); err != nil {
+		return
+	}
+}
+
+func (r campaignPreflightRequest) toDomain(tenant auth.TenantContext) (outbound.CampaignArtifact, error) {
+	startsAt, err := time.Parse(time.RFC3339, r.Schedule.StartsAt)
+	if err != nil {
+		return outbound.CampaignArtifact{}, err
+	}
+	campaign := outbound.CampaignArtifact{
+		CampaignID: r.CampaignID,
+		Name:       r.Name,
+		TenantID:   tenant.TenantID,
+		ActorID:    tenant.KeyID,
+		Audience:   make([]outbound.CampaignRecipient, 0, len(r.Audience)),
+		Steps:      make([]outbound.CampaignStep, 0, len(r.Steps)),
+		Schedule:   outbound.CampaignSchedule{StartsAt: startsAt, Timezone: r.Schedule.Timezone},
+	}
+	for _, recipient := range r.Audience {
+		campaign.Audience = append(campaign.Audience, outbound.CampaignRecipient{
+			RecipientRef: recipient.RecipientRef,
+			DebtorID:     recipient.DebtorID,
+			Relationship: recipient.Relationship,
+			ChannelRefs:  recipient.ChannelRefs,
+			Timezone:     recipient.Timezone,
+		})
+	}
+	for _, step := range r.Steps {
+		campaign.Steps = append(campaign.Steps, outbound.CampaignStep{
+			StepID:        step.StepID,
+			TemplateID:    step.TemplateID,
+			Channel:       core.InteractionChannel(step.Channel),
+			TextTemplate:  step.TextTemplate,
+			SendOffset:    time.Duration(step.SendOffsetMinutes) * time.Minute,
+			PaymentTarget: step.PaymentTarget,
+		})
+	}
+	return campaign, nil
 }
 
 func (s *Server) handleGetRedecoMonthlyReport(w http.ResponseWriter, r *http.Request) {

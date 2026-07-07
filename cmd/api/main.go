@@ -14,6 +14,7 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/httpapi"
 	"github.com/ricardoalt1515/vigia/internal/judge"
+	"github.com/ricardoalt1515/vigia/internal/outbound"
 	"github.com/ricardoalt1515/vigia/internal/postgres"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -81,6 +82,17 @@ func run(ctx context.Context) error {
 	}
 
 	server := httpapi.NewServer(auth.NewAuthenticator(keyStore, time.Now), reader, summary, evidence, reevaluator, dashboards, complaints, reports)
+	outboundRecorder := postgres.NewOutboundDecisionRecorderFromPool(pool)
+	outboundDecider := outbound.Decider{
+		ContextResolver: postgres.NewOutboundAuthorityContextResolverFromPool(pool),
+		BundleResolver:  postgres.NewBundleResolverAdapterFromPool(pool),
+		ContactWindow:   detection.Window{StartHour: 8, EndHour: 21},
+		ToneJudge:       buildJudge(cfg),
+		ToneRubric:      judge.LoadRubric(),
+		Recorder:        outboundRecorder,
+	}
+	server.SetOutboundGuardrails(outboundDecider, outboundRecorder)
+	server.SetCampaignPreflight(outbound.PreflightService{Decider: outboundDecider})
 
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {

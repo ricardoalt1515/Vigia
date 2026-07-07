@@ -60,6 +60,17 @@ func countEvents(events []Event, typ EventType) int {
 	return count
 }
 
+func eventDataByType(t *testing.T, events []Event, typ EventType) map[string]any {
+	t.Helper()
+	for _, event := range events {
+		if event.Type == typ {
+			return event.Data
+		}
+	}
+	t.Fatalf("event %q not found in %#v", typ, events)
+	return nil
+}
+
 func TestRunStepAllowedReadToolRecordsEvents(t *testing.T) {
 	model := &queuedModelProvider{outputs: []ModelOutput{{
 		Plan: "Inspect the case summary before answering.",
@@ -128,6 +139,46 @@ func TestRunStepDeniedToolDoesNotExecute(t *testing.T) {
 	}
 	if result.ToolResult.Reason != "authority-bearing tool" {
 		t.Fatalf("tool result reason = %q", result.ToolResult.Reason)
+	}
+}
+
+func TestRunStepDeniedToolPropagatesPermissionMetadataToEvents(t *testing.T) {
+	metadata := map[string]any{
+		"decision_id":           "decision-1",
+		"decision_mode":         "enforcement",
+		"policy_bundle_version": "v1",
+		"fail_closed_codes":     []string{"missing_debtor_timezone"},
+	}
+	model := &queuedModelProvider{outputs: []ModelOutput{{ToolCall: &ToolCall{Name: "send_outbound_utterance"}}}}
+	runtime := Runtime{
+		Model: model,
+		Tools: ToolRegistry{"send_outbound_utterance": &spyTool{result: ToolResult{Status: ToolStatusSuccess}}},
+		Permissions: gateFunc(func(ctx context.Context, call ToolCall) PermissionDecision {
+			return PermissionDecision{Kind: PermissionDenied, Reason: "missing timezone", Metadata: metadata}
+		}),
+		Validator: validatorFunc(alwaysValid),
+		Budget:    Budget{MaxModelAttempts: 1, MaxToolCalls: 1},
+	}
+
+	result, err := runtime.RunStep(context.Background(), StepInput{Input: "send"})
+	if err != nil {
+		t.Fatalf("RunStep returned error: %v", err)
+	}
+
+	permissionEvent := eventDataByType(t, result.Events, EventPermissionDecision)
+	if got := permissionEvent["decision_id"]; got != "decision-1" {
+		t.Fatalf("permission decision_id = %v, want decision-1", got)
+	}
+	if got := permissionEvent["fail_closed_codes"]; !reflect.DeepEqual(got, []string{"missing_debtor_timezone"}) {
+		t.Fatalf("permission fail_closed_codes = %#v, want missing_debtor_timezone", got)
+	}
+
+	toolResultEvent := eventDataByType(t, result.Events, EventToolResult)
+	if got := toolResultEvent["decision_mode"]; got != "enforcement" {
+		t.Fatalf("tool result decision_mode = %v, want enforcement", got)
+	}
+	if got := toolResultEvent["policy_bundle_version"]; got != "v1" {
+		t.Fatalf("tool result policy_bundle_version = %v, want v1", got)
 	}
 }
 

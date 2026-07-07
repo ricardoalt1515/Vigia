@@ -15,6 +15,7 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
 	"github.com/ricardoalt1515/vigia/internal/orchestrator"
+	"github.com/ricardoalt1515/vigia/internal/outbound"
 )
 
 func TestGetInteractions(t *testing.T) {
@@ -230,6 +231,201 @@ func TestGetSummary(t *testing.T) {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 		}
 	})
+}
+
+func TestOutboundGuardrailDecisionEndpoint(t *testing.T) {
+	fixedTime := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeKeyStore{records: map[string]auth.TenantAPIKey{
+		auth.HashAPIKey("tenant-a-key"): {ID: "key-a", TenantID: "tenant-a", KeyHash: auth.HashAPIKey("tenant-a-key"), Status: auth.StatusActive},
+	}}
+	decider := &fakeOutboundDecisionRunner{decision: outbound.Decision{
+		ID: "proposal-1", Mode: outbound.DecisionModeEnforcement, ActionKind: outbound.ActionSendOutboundUtterance, ProposalID: "proposal-1", Outcome: outbound.DecisionDeny, Reason: "blocked",
+		FailClosedReasons: []outbound.ContextGap{{Code: "judge_unavailable", Field: "tone_judge", Remediation: "configure judge"}},
+	}}
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), &fakeInteractionReader{}, &fakeSummaryReader{}, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{}, nil)
+	handler.SetOutboundGuardrails(decider, nil)
+	body := `{"proposal_id":"proposal-1","case_id":"case-1","debtor_id":"debtor-1","channel":"message","recipient_ref":"recipient-1","text":"Buen día","proposed_at":"2026-07-06T15:00:00Z"}`
+
+	t.Run("rejects unauthorized before decision", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/outbound/guardrails/decide", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+		if decider.calls != 0 {
+			t.Fatalf("decider calls = %d, want 0", decider.calls)
+		}
+	})
+
+	t.Run("uses permission gate and authenticated scope", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/outbound/guardrails/decide", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if decider.lastReq.TenantID != "tenant-a" || decider.lastReq.ActorID != "key-a" || decider.lastReq.Mode != outbound.DecisionModeEnforcement {
+			t.Fatalf("decision scope = %+v, want tenant-a/key-a enforcement", decider.lastReq)
+		}
+		var response map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if response["decision"] != "denied" {
+			t.Fatalf("decision = %v, want denied", response["decision"])
+		}
+		metadata, ok := response["metadata"].(map[string]any)
+		if !ok || metadata["action_kind"] != string(outbound.ActionSendOutboundUtterance) || metadata["proposal_id"] != "proposal-1" {
+			t.Fatalf("metadata = %+v, want action/proposal", response["metadata"])
+		}
+	})
+}
+
+func TestCampaignPreflightEndpoint(t *testing.T) {
+	fixedTime := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeKeyStore{records: map[string]auth.TenantAPIKey{
+		auth.HashAPIKey("tenant-a-key"): {ID: "key-a", TenantID: "tenant-a", KeyHash: auth.HashAPIKey("tenant-a-key"), Status: auth.StatusActive},
+	}}
+	preflight := &fakeCampaignPreflightRunner{brief: outbound.PreflightBrief{
+		CampaignID:          "campaign-1",
+		Status:              outbound.PreflightStatusFailed,
+		PolicyBundleVersion: "policy-v4",
+		Summary:             "campaign preflight failed; review findings and context gaps before launch",
+		Findings: []outbound.PreflightFinding{{
+			CampaignID:          "campaign-1",
+			StepID:              "step-1",
+			TemplateID:          "template-1",
+			RecipientRef:        "recipient-1",
+			RuleCode:            "MX-REDECO-06",
+			Remediation:         "Contact only the debtor or a verified authorized third party.",
+			PolicyBundleVersion: "policy-v4",
+			DryRunRefs:          []outbound.DecisionRef{{Type: "dry_run_decision", ID: "dry-run:campaign-1/recipient-1/step-1", Mode: outbound.DecisionModeDryRun}},
+		}},
+	}}
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), &fakeInteractionReader{}, &fakeSummaryReader{}, &fakeEvidenceReader{}, &fakeReEvaluator{}, &fakeDashboardReader{}, nil)
+	handler.SetCampaignPreflight(preflight)
+
+	body := `{
+		"campaign_id":"campaign-1",
+		"name":"July outreach",
+		"actor_id":"spoofed-actor",
+		"audience":[{"recipient_ref":"recipient-1","debtor_id":"debtor-1","relationship":"debtor","channel_refs":["message"],"timezone":"America/Mexico_City"}],
+		"steps":[{"step_id":"step-1","template_id":"template-1","channel":"message","text_template":"Buen día {{debtor_id}}","send_offset_minutes":60,"payment_target":"creditor"}],
+		"schedule":{"starts_at":"2026-07-06T15:00:00Z","timezone":"America/Mexico_City"}
+	}`
+
+	t.Run("rejects unauthorized requests before running preflight", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/campaigns/preflight", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+		if preflight.calls != 0 {
+			t.Fatalf("preflight calls = %d, want 0", preflight.calls)
+		}
+	})
+
+	t.Run("uses authenticated tenant scope and returns actionable brief", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/campaigns/preflight", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if preflight.lastCampaign.TenantID != "tenant-a" || preflight.lastCampaign.ActorID != "key-a" {
+			t.Fatalf("campaign auth scope = tenant %q actor %q, want tenant-a/key-a", preflight.lastCampaign.TenantID, preflight.lastCampaign.ActorID)
+		}
+		if len(preflight.lastCampaign.Audience) != 1 || len(preflight.lastCampaign.Steps) != 1 {
+			t.Fatalf("campaign input = %+v, want one recipient and one step", preflight.lastCampaign)
+		}
+		var wire map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &wire); err != nil {
+			t.Fatalf("decode wire response: %v", err)
+		}
+		if _, exists := wire["CampaignID"]; exists {
+			t.Fatalf("wire response uses PascalCase keys: %s", rec.Body.String())
+		}
+		if wire["campaign_id"] != "campaign-1" || wire["policy_bundle_version"] != "policy-v4" || wire["status"] != string(outbound.PreflightStatusFailed) {
+			t.Fatalf("wire response = %+v, want snake_case failed policy-v4", wire)
+		}
+		findings, ok := wire["findings"].([]any)
+		if !ok || len(findings) != 1 {
+			t.Fatalf("wire findings = %T/%v, want one finding", wire["findings"], wire["findings"])
+		}
+		finding, ok := findings[0].(map[string]any)
+		if !ok {
+			t.Fatalf("wire finding = %T, want object", findings[0])
+		}
+		if finding["rule_code"] != "MX-REDECO-06" {
+			t.Fatalf("wire finding rule_code = %v, want MX-REDECO-06", finding["rule_code"])
+		}
+		if _, exists := finding["RuleCode"]; exists {
+			t.Fatalf("wire finding uses PascalCase keys: %+v", finding)
+		}
+		dryRunRefs, ok := finding["dry_run_refs"].([]any)
+		if !ok || len(dryRunRefs) != 1 {
+			t.Fatalf("wire dry_run_refs = %T/%v, want one ref", finding["dry_run_refs"], finding["dry_run_refs"])
+		}
+		if evidenceRefs, ok := finding["evidence_refs"].([]any); ok && len(evidenceRefs) != 0 {
+			t.Fatalf("wire evidence_refs = %v, want none", evidenceRefs)
+		}
+	})
+
+	t.Run("rejects malformed request shape", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/campaigns/preflight", strings.NewReader(`{"campaign_id":"campaign-1","schedule":{"starts_at":"not-a-time"}}`))
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+		}
+	})
+}
+
+type fakeOutboundDecisionRunner struct {
+	calls    int
+	lastReq  outbound.DecisionRequest
+	decision outbound.Decision
+	err      error
+}
+
+func (r *fakeOutboundDecisionRunner) Decide(_ context.Context, req outbound.DecisionRequest) (outbound.Decision, error) {
+	r.calls++
+	r.lastReq = req
+	if r.err != nil {
+		return outbound.Decision{}, r.err
+	}
+	return r.decision, nil
+}
+
+type fakeCampaignPreflightRunner struct {
+	calls        int
+	lastCampaign outbound.CampaignArtifact
+	brief        outbound.PreflightBrief
+	err          error
+}
+
+func (r *fakeCampaignPreflightRunner) Run(_ context.Context, campaign outbound.CampaignArtifact) (outbound.PreflightBrief, error) {
+	r.calls++
+	r.lastCampaign = campaign
+	if r.err != nil {
+		return outbound.PreflightBrief{}, r.err
+	}
+	return r.brief, nil
 }
 
 type fakeKeyStore struct {

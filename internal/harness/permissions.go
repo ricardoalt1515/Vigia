@@ -13,8 +13,9 @@ const (
 
 // PermissionDecision is the typed result of evaluating one proposed tool call.
 type PermissionDecision struct {
-	Kind   PermissionDecisionKind
-	Reason string
+	Kind     PermissionDecisionKind
+	Reason   string
+	Metadata map[string]any
 }
 
 // PermissionGate decides whether the runtime may execute a proposed tool call.
