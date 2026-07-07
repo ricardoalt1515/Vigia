@@ -13,6 +13,7 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/detection"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
+	"github.com/ricardoalt1515/vigia/internal/outbound"
 	"github.com/ricardoalt1515/vigia/internal/postgres"
 )
 
@@ -77,6 +78,195 @@ func countEvidenceRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool, ev
 // TestEvidenceAppendProducesExactlyOneRecord covers *Successful evaluation
 // produces exactly one evidence record* and *First record for a tenant uses
 // the genesis prev_hash*.
+func TestOutboundAuthorityDecisionRecorderWritesBlockedEvidenceChain(t *testing.T) {
+	databaseURL := requireDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+
+	tenantID, debtorID := seedTenantAndDebtor(t, ctx, pool, "outbound-authority")
+	bundleID := seedActivePolicyBundle(t, ctx, pool, tenantID, "outbound-authority", "redeco-2026.1")
+
+	recorder := postgres.NewOutboundDecisionRecorderFromPool(pool)
+	recorded, err := recorder.Record(ctx, outbound.DecisionRequest{
+		TenantID: tenantID,
+		ActorID:  "agent-1",
+		Mode:     outbound.DecisionModeEnforcement,
+		Proposal: outbound.OutboundActionProposal{
+			Kind:       outbound.ActionSendOutboundUtterance,
+			ProposalID: "proposal-1",
+			DebtorID:   debtorID,
+			Channel:    core.InteractionChannelMessage,
+			Text:       "bounded proposed utterance is not stored in evidence metadata",
+			ProposedAt: time.Date(2026, 7, 6, 15, 0, 0, 0, time.UTC),
+		},
+		RequestID: "decision-1",
+	}, outbound.Decision{
+		ID:                  "decision-1",
+		Mode:                outbound.DecisionModeEnforcement,
+		ActionKind:          outbound.ActionSendOutboundUtterance,
+		ProposalID:          "proposal-1",
+		Outcome:             outbound.DecisionDeny,
+		Reason:              "third-party contact rule blocked the outbound proposal",
+		PolicyBundleID:      bundleID,
+		PolicyBundleVersion: "redeco-2026.1",
+		CheckedAt:           time.Date(2026, 7, 6, 15, 0, 0, 0, time.UTC),
+		Violations: []outbound.RuleViolation{{
+			RuleCode:    "MX-REDECO-06",
+			Severity:    core.SeverityHigh,
+			Rationale:   "third-party contact is not authorized",
+			Remediation: "Contact only the debtor or authorized third party.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if len(recorded.EventRefs) != 1 || recorded.EventRefs[0].Type != "interaction_event" || recorded.EventRefs[0].Mode != outbound.DecisionModeEnforcement {
+		t.Fatalf("event refs = %+v, want enforcement interaction_event", recorded.EventRefs)
+	}
+	if len(recorded.EvidenceRefs) != 1 || recorded.EvidenceRefs[0].Type != "evidence_record" || recorded.EvidenceRefs[0].Mode != outbound.DecisionModeEnforcement {
+		t.Fatalf("evidence refs = %+v, want enforcement evidence_record", recorded.EvidenceRefs)
+	}
+
+	var status, transcriptRef string
+	if err := pool.QueryRow(ctx, `SELECT status, transcript_ref FROM interaction_events WHERE id = $1`, recorded.EventRefs[0].ID).Scan(&status, &transcriptRef); err != nil {
+		t.Fatalf("read interaction_event: %v", err)
+	}
+	if status != "blocked_before_send" {
+		t.Fatalf("interaction status = %q, want blocked_before_send", status)
+	}
+	if transcriptRef != "outbound:decision/decision-1/proposal/proposal-1" {
+		t.Fatalf("transcript_ref = %q, want decision/proposal correlation", transcriptRef)
+	}
+
+	var outcome, policyVersion string
+	if err := pool.QueryRow(ctx, `
+		SELECT e.overall_outcome, er.policy_bundle_version
+		FROM evidence_records er
+		JOIN evaluations e ON e.id = er.evaluation_id
+		WHERE er.id = $1
+	`, recorded.EvidenceRefs[0].ID).Scan(&outcome, &policyVersion); err != nil {
+		t.Fatalf("read evidence chain: %v", err)
+	}
+	if outcome != "fail" || policyVersion != "redeco-2026.1" {
+		t.Fatalf("chain = (%s, %s), want (fail, redeco-2026.1)", outcome, policyVersion)
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT dr.detector_code, dr.result_payload->>'rationale'
+		FROM evidence_records er
+		JOIN evaluations e ON e.id = er.evaluation_id
+		JOIN detector_result_rows dr ON dr.evaluation_id = e.id
+		WHERE er.id = $1
+	`, recorded.EvidenceRefs[0].ID)
+	if err != nil {
+		t.Fatalf("read detector rows: %v", err)
+	}
+	defer rows.Close()
+	seen := map[string]string{}
+	for rows.Next() {
+		var code, rationale string
+		if err := rows.Scan(&code, &rationale); err != nil {
+			t.Fatalf("scan detector row: %v", err)
+		}
+		seen[code] = rationale
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate detector rows: %v", err)
+	}
+	if _, ok := seen["MX-REDECO-06"]; !ok {
+		t.Fatalf("detector rows = %+v, want MX-REDECO-06", seen)
+	}
+	authority := seen["authority_decision"]
+	for _, want := range []string{"decision_id=decision-1", "decision_mode=enforcement", "decision_outcome=deny", "action_kind=send_outbound_utterance", "proposal_id=proposal-1"} {
+		if !strings.Contains(authority, want) {
+			t.Fatalf("authority_decision rationale = %q, want %q", authority, want)
+		}
+	}
+}
+
+func TestOutboundAuthorityContextResolverUsesTenantScopedDebtorTimezone(t *testing.T) {
+	databaseURL := requireDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+
+	tenantA, debtorA := seedTenantAndDebtor(t, ctx, pool, "outbound-resolver-a")
+	tenantB, _ := seedTenantAndDebtor(t, ctx, pool, "outbound-resolver-b")
+	resolver := postgres.NewOutboundAuthorityContextResolverFromPool(pool)
+
+	authority, err := resolver.Resolve(ctx, tenantA, outbound.OutboundActionProposal{
+		DebtorID:                 debtorA,
+		Channel:                  core.InteractionChannelMessage,
+		ProposedAt:               time.Date(2026, 7, 6, 15, 0, 0, 0, time.UTC),
+		DebtorTimezone:           "Etc/UTC",
+		ContactPartyRelationship: "debtor",
+		AuthorizedChannels:       []string{"message"},
+		PaymentTarget:            "creditor",
+	})
+	if err != nil {
+		t.Fatalf("Resolve tenant A debtor: %v", err)
+	}
+	if authority.TenantID != tenantA || authority.DebtorID != debtorA || authority.DebtorTimezone != "America/Mexico_City" {
+		t.Fatalf("authority = %+v, want tenant-scoped DB debtor timezone", authority)
+	}
+
+	if _, err := resolver.Resolve(ctx, tenantB, outbound.OutboundActionProposal{DebtorID: debtorA, Channel: core.InteractionChannelMessage, ProposedAt: time.Date(2026, 7, 6, 15, 0, 0, 0, time.UTC)}); err == nil {
+		t.Fatal("expected cross-tenant debtor lookup to fail")
+	}
+}
+
+func TestOutboundAuthorityDecisionRecorderRollsBackInteractionWhenEvidenceFails(t *testing.T) {
+	databaseURL := requireDatabaseURL(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	defer pool.Close()
+
+	tenantID, debtorID := seedTenantAndDebtor(t, ctx, pool, "outbound-rollback")
+	recorder := postgres.NewOutboundDecisionRecorderFromPool(pool)
+	_, err = recorder.Record(ctx, outbound.DecisionRequest{
+		TenantID:  tenantID,
+		Mode:      outbound.DecisionModeEnforcement,
+		Proposal:  outbound.OutboundActionProposal{Kind: outbound.ActionSendOutboundUtterance, ProposalID: "proposal-rollback", DebtorID: debtorID, Channel: core.InteractionChannelMessage, ProposedAt: time.Date(2026, 7, 6, 15, 0, 0, 0, time.UTC)},
+		RequestID: "decision-rollback",
+	}, outbound.Decision{
+		ID:                  "decision-rollback",
+		Mode:                outbound.DecisionModeEnforcement,
+		ActionKind:          outbound.ActionSendOutboundUtterance,
+		ProposalID:          "proposal-rollback",
+		Outcome:             outbound.DecisionDeny,
+		PolicyBundleID:      "00000000-0000-0000-0000-000000000001",
+		PolicyBundleVersion: "missing-bundle",
+		CheckedAt:           time.Date(2026, 7, 6, 15, 0, 0, 0, time.UTC),
+		Violations:          []outbound.RuleViolation{{RuleCode: "MX-REDECO-06", Severity: core.SeverityHigh, Rationale: "blocked"}},
+	})
+	if err == nil {
+		t.Fatal("expected Record to fail on missing policy bundle FK")
+	}
+	var interactions int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM interaction_events WHERE tenant_id = $1 AND transcript_ref = 'outbound:decision/decision-rollback/proposal/proposal-rollback'`, tenantID).Scan(&interactions); err != nil {
+		t.Fatalf("count interaction_events: %v", err)
+	}
+	if interactions != 0 {
+		t.Fatalf("interaction_events persisted after failed evidence transaction = %d, want 0", interactions)
+	}
+}
+
 func TestEvidenceAppendProducesExactlyOneRecord(t *testing.T) {
 	databaseURL := requireDatabaseURL(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

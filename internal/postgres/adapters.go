@@ -20,6 +20,7 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/httpapi"
 	"github.com/ricardoalt1515/vigia/internal/judge"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
+	"github.com/ricardoalt1515/vigia/internal/outbound"
 	"github.com/ricardoalt1515/vigia/internal/tenantdb"
 )
 
@@ -250,164 +251,11 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 
 	var result core.Evaluation
 	err = tenantdb.WithTenantTx(ctx, s.db, in.TenantID, func(ctx context.Context, tx tenantdb.Tx) error {
-		q := vigiaDB.New(tx)
-
-		var policyBundleID pgtype.UUID
-		if in.PolicyBundleID != nil {
-			policyBundleID, err = parseUUID(*in.PolicyBundleID)
-			if err != nil {
-				return err
-			}
-		}
-
-		header, err := q.CreateEvaluation(ctx, vigiaDB.CreateEvaluationParams{
-			TenantID:            tenantUUID,
-			InteractionEventID:  interactionUUID,
-			OverallOutcome:      in.OverallOutcome,
-			RequiresHitl:        in.RequiresHITL,
-			JudgeModelID:        in.JudgeModelID,
-			RubricVersion:       in.RubricVersion,
-			PolicyBundleVersion: in.PolicyBundleVersion,
-			PolicyBundleID:      policyBundleID,
-		})
+		evaluation, err := createEvaluationWithLedger(ctx, vigiaDB.New(tx), tenantUUID, interactionUUID, in)
 		if err != nil {
 			return err
 		}
-
-		detectorResults := make([]ledger.DetectorResult, 0, len(in.DetectorResults))
-		for _, dr := range in.DetectorResults {
-			payload, err := json.Marshal(detectorResultPayload{Rationale: dr.Rationale})
-			if err != nil {
-				return err
-			}
-			confidence, err := numericFromFloatPtr(dr.Confidence)
-			if err != nil {
-				return err
-			}
-			score, err := numericFromFloatPtr(dr.Score)
-			if err != nil {
-				return err
-			}
-			if _, err := q.CreateDetectorResultRow(ctx, vigiaDB.CreateDetectorResultRowParams{
-				TenantID:           tenantUUID,
-				InteractionEventID: interactionUUID,
-				DetectorCode:       dr.DetectorCode,
-				Outcome:            string(dr.Outcome),
-				Severity:           string(dr.Severity),
-				ResultPayload:      payload,
-				EvaluationID:       pgtype.UUID{Bytes: header.ID.Bytes, Valid: true},
-				Confidence:         confidence,
-				Score:              score,
-			}); err != nil {
-				return err
-			}
-			detectorResults = append(detectorResults, ledger.DetectorResult{
-				Code:      dr.DetectorCode,
-				Outcome:   string(dr.Outcome),
-				Severity:  string(dr.Severity),
-				Rationale: dr.Rationale,
-			})
-		}
-
-		// Evidence ledger append (issue #3): one more write inside this same
-		// tenantdb.WithTenantTx call, after the header + detector rows. A
-		// rollback anywhere above (or below) leaves no evaluations row, no
-		// detector_result_rows row, no evidence_records row, and the
-		// ledger_chain_heads row unchanged — the head lock and the evidence
-		// insert commit atomically with everything else.
-		head, err := q.LockChainHead(ctx, vigiaDB.LockChainHeadParams{
-			TenantID: tenantUUID,
-			LastHash: ledger.GenesisPrevHash,
-		})
-		if err != nil {
-			return err
-		}
-
-		seq := head.LastSeq + 1
-		prevHash := head.LastHash
-		// created_at has no DB default: the ledger generates and inserts the
-		// exact microsecond-truncated value it hashes, so a DB round-trip
-		// never drifts the hash (Postgres timestamptz is microsecond).
-		createdAt := time.Now().UTC().Truncate(time.Microsecond)
-
-		body := ledger.Body{
-			TenantID:            in.TenantID,
-			InteractionEventID:  in.InteractionEventID,
-			EvaluationID:        uuidString(header.ID),
-			Seq:                 seq,
-			OverallOutcome:      header.OverallOutcome,
-			PolicyBundleVersion: header.PolicyBundleVersion,
-			InputsDigest:        ledger.ComputeInputsDigest(detectorResults),
-			CreatedAt:           createdAt,
-		}
-
-		// Judge sub-object (issue #4): populated ONLY when a judge ran
-		// (in.JudgeModelID != ""), so judge-less bodies stay byte-identical
-		// to their pre-#4 shape (Decision 6). The three evidence_records
-		// columns are the hash-bearing copy and MUST be written together
-		// with body.Judge — evidenceRowToRecord reconstructs Body.Judge
-		// from these columns on every read, so without them every judged
-		// record would fail re-verification (design's gate-fix CRITICAL).
-		var judgeRubricVersion, judgeModelID, judgeConfidence *string
-		if in.JudgeModelID != "" {
-			confidenceStr := ""
-			if in.JudgeConfidence != nil {
-				confidenceStr = strconv.FormatFloat(*in.JudgeConfidence, 'f', 4, 64)
-			}
-			body.Judge = &ledger.JudgeEvidence{
-				RubricVersion: in.RubricVersion,
-				JudgeModelID:  in.JudgeModelID,
-				Confidence:    confidenceStr,
-			}
-			rubricVersion := in.RubricVersion
-			judgeModel := in.JudgeModelID
-			judgeRubricVersion = &rubricVersion
-			judgeModelID = &judgeModel
-			judgeConfidence = &confidenceStr
-		}
-
-		hash := ledger.Hash(prevHash, body)
-
-		if _, err := q.InsertEvidenceRecord(ctx, vigiaDB.InsertEvidenceRecordParams{
-			TenantID:            tenantUUID,
-			InteractionEventID:  interactionUUID,
-			EvaluationID:        pgtype.UUID{Bytes: header.ID.Bytes, Valid: true},
-			Seq:                 seq,
-			PrevHash:            prevHash,
-			Hash:                hash,
-			OverallOutcome:      body.OverallOutcome,
-			PolicyBundleVersion: body.PolicyBundleVersion,
-			InputsDigest:        body.InputsDigest,
-			CreatedAt:           pgtype.Timestamptz{Time: createdAt, Valid: true},
-			JudgeRubricVersion:  judgeRubricVersion,
-			JudgeModelID:        judgeModelID,
-			JudgeConfidence:     judgeConfidence,
-		}); err != nil {
-			return err
-		}
-
-		if err := q.UpdateChainHead(ctx, vigiaDB.UpdateChainHeadParams{
-			TenantID: tenantUUID,
-			LastSeq:  seq,
-			LastHash: hash,
-		}); err != nil {
-			return err
-		}
-
-		var resultPolicyBundleID *core.ID
-		if header.PolicyBundleID.Valid {
-			id := core.ID(uuidString(header.PolicyBundleID))
-			resultPolicyBundleID = &id
-		}
-		result = core.Evaluation{
-			ID:                  core.ID(uuidString(header.ID)),
-			TenantID:            core.ID(uuidString(header.TenantID)),
-			InteractionEventID:  core.ID(uuidString(header.InteractionEventID)),
-			OverallOutcome:      header.OverallOutcome,
-			PolicyBundleVersion: header.PolicyBundleVersion,
-			PolicyBundleID:      resultPolicyBundleID,
-			CreatedAt:           header.CreatedAt.Time,
-		}
+		result = evaluation
 		return nil
 	})
 	if err != nil {
@@ -417,6 +265,252 @@ func (s *EvaluationStore) CreateEvaluation(ctx context.Context, in evaluation.Cr
 }
 
 var _ evaluation.EvaluationStore = (*EvaluationStore)(nil)
+
+// OutboundDecisionRecorder persists blocked realtime authority decisions through
+// the existing interaction_events -> evaluations -> evidence_records chain.
+type OutboundDecisionRecorder struct {
+	db tenantdb.Beginner
+}
+
+func NewOutboundDecisionRecorder(db tenantdb.Beginner) *OutboundDecisionRecorder {
+	return &OutboundDecisionRecorder{db: db}
+}
+
+func NewOutboundDecisionRecorderFromPool(pool *pgxpool.Pool) *OutboundDecisionRecorder {
+	return NewOutboundDecisionRecorder(poolBeginner{pool: pool})
+}
+
+func (r *OutboundDecisionRecorder) Record(ctx context.Context, req outbound.DecisionRequest, decision outbound.Decision) (outbound.RecordedDecision, error) {
+	if req.Mode != outbound.DecisionModeEnforcement || (decision.Outcome != outbound.DecisionDeny && decision.Outcome != outbound.DecisionApprovalRequired) {
+		return outbound.RecordedDecision{}, nil
+	}
+	tenantUUID, err := parseUUID(req.TenantID)
+	if err != nil {
+		return outbound.RecordedDecision{}, err
+	}
+	debtorUUID, err := parseUUID(req.Proposal.DebtorID)
+	if err != nil {
+		return outbound.RecordedDecision{}, err
+	}
+	var recorded outbound.RecordedDecision
+	err = tenantdb.WithTenantTx(ctx, r.db, req.TenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		q := vigiaDB.New(tx)
+		transcriptRef := outboundDecisionTranscriptRef(decision.ID, req.Proposal.ProposalID)
+		interaction, err := q.CreateInteractionEvent(ctx, vigiaDB.CreateInteractionEventParams{
+			TenantID:       tenantUUID,
+			DebtorID:       debtorUUID,
+			Channel:        string(req.Proposal.Channel),
+			Direction:      "outbound",
+			Status:         "blocked_before_send",
+			OccurredAt:     pgtype.Timestamptz{Time: req.Proposal.ProposedAt, Valid: true},
+			TranscriptRef:  &transcriptRef,
+			DebtorTimezone: "",
+		})
+		if err != nil {
+			return err
+		}
+		input := evaluation.CreateEvaluationInput{
+			TenantID:            req.TenantID,
+			InteractionEventID:  uuidString(interaction.ID),
+			OverallOutcome:      "fail",
+			DetectorResults:     outboundDetectorResults(decision),
+			RequiresHITL:        decision.Outcome == outbound.DecisionApprovalRequired,
+			PolicyBundleVersion: decision.PolicyBundleVersion,
+			PolicyBundleID:      stringPtrOrNil(decision.PolicyBundleID),
+		}
+		if _, err := createEvaluationWithLedger(ctx, q, tenantUUID, interaction.ID, input); err != nil {
+			return err
+		}
+		evidence, err := q.GetEvidenceRecordByInteraction(ctx, vigiaDB.GetEvidenceRecordByInteractionParams{TenantID: tenantUUID, InteractionEventID: interaction.ID})
+		if err != nil {
+			return err
+		}
+		recorded = outbound.RecordedDecision{
+			EventRefs:    []outbound.DecisionRef{{Type: "interaction_event", ID: uuidString(interaction.ID), Mode: outbound.DecisionModeEnforcement}},
+			EvidenceRefs: []outbound.DecisionRef{{Type: "evidence_record", ID: uuidString(evidence.ID), Mode: outbound.DecisionModeEnforcement}},
+		}
+		return nil
+	})
+	if err != nil {
+		return outbound.RecordedDecision{}, err
+	}
+	return recorded, nil
+}
+
+var _ outbound.DecisionRecorder = (*OutboundDecisionRecorder)(nil)
+
+// OutboundAuthorityContextResolver resolves tenant-scoped debtor context from
+// Postgres and combines it with the already-normalized outbound proposal fields.
+type OutboundAuthorityContextResolver struct {
+	db tenantdb.Beginner
+}
+
+func NewOutboundAuthorityContextResolver(db tenantdb.Beginner) *OutboundAuthorityContextResolver {
+	return &OutboundAuthorityContextResolver{db: db}
+}
+
+func NewOutboundAuthorityContextResolverFromPool(pool *pgxpool.Pool) *OutboundAuthorityContextResolver {
+	return NewOutboundAuthorityContextResolver(poolBeginner{pool: pool})
+}
+
+func (r *OutboundAuthorityContextResolver) Resolve(ctx context.Context, tenantID string, p outbound.OutboundActionProposal) (outbound.AuthorityContext, error) {
+	tenantUUID, err := parseUUID(tenantID)
+	if err != nil {
+		return outbound.AuthorityContext{}, err
+	}
+	debtorUUID, err := parseUUID(p.DebtorID)
+	if err != nil {
+		return outbound.AuthorityContext{}, err
+	}
+	var authority outbound.AuthorityContext
+	err = tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		debtor, err := vigiaDB.New(tx).GetDebtorByTenant(ctx, vigiaDB.GetDebtorByTenantParams{TenantID: tenantUUID, ID: debtorUUID})
+		if err != nil {
+			return err
+		}
+		authority = outbound.AuthorityContext{
+			TenantID:                 tenantID,
+			DebtorID:                 p.DebtorID,
+			DebtorTimezone:           debtor.Timezone,
+			Channel:                  p.Channel,
+			ProposedAt:               p.ProposedAt,
+			ContactPartyRelationship: p.ContactPartyRelationship,
+			AuthorizedChannels:       p.AuthorizedChannels,
+			PaymentRecipient:         p.PaymentTarget,
+		}
+		return nil
+	})
+	if err != nil {
+		return outbound.AuthorityContext{}, err
+	}
+	return authority, nil
+}
+
+var _ outbound.AuthorityContextResolver = (*OutboundAuthorityContextResolver)(nil)
+
+func outboundDecisionTranscriptRef(decisionID, proposalID string) string {
+	return "outbound:decision/" + decisionID + "/proposal/" + proposalID
+}
+
+func stringPtrOrNil(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func outboundDetectorResults(decision outbound.Decision) []evaluation.DetectorResultInput {
+	results := []evaluation.DetectorResultInput{{
+		DetectorCode: "authority_decision",
+		Outcome:      core.DetectorOutcomeFail,
+		Severity:     core.SeverityHigh,
+		Rationale:    fmt.Sprintf("decision_id=%s decision_mode=%s decision_outcome=%s action_kind=%s proposal_id=%s", decision.ID, decision.Mode, decision.Outcome, decision.ActionKind, decision.ProposalID),
+	}}
+	for _, violation := range decision.Violations {
+		results = append(results, evaluation.DetectorResultInput{
+			DetectorCode: violation.RuleCode,
+			Outcome:      core.DetectorOutcomeFail,
+			Severity:     violation.Severity,
+			Rationale:    violation.Rationale,
+		})
+	}
+	for _, gap := range decision.FailClosedReasons {
+		results = append(results, evaluation.DetectorResultInput{
+			DetectorCode: gap.Code,
+			Outcome:      core.DetectorOutcomeFail,
+			Severity:     core.SeverityHigh,
+			Rationale:    gap.Remediation,
+		})
+	}
+	return results
+}
+
+func createEvaluationWithLedger(ctx context.Context, q *vigiaDB.Queries, tenantUUID, interactionUUID pgtype.UUID, in evaluation.CreateEvaluationInput) (core.Evaluation, error) {
+	var policyBundleID pgtype.UUID
+	var err error
+	if in.PolicyBundleID != nil {
+		policyBundleID, err = parseUUID(*in.PolicyBundleID)
+		if err != nil {
+			return core.Evaluation{}, err
+		}
+	}
+	header, err := q.CreateEvaluation(ctx, vigiaDB.CreateEvaluationParams{
+		TenantID:            tenantUUID,
+		InteractionEventID:  interactionUUID,
+		OverallOutcome:      in.OverallOutcome,
+		RequiresHitl:        in.RequiresHITL,
+		JudgeModelID:        in.JudgeModelID,
+		RubricVersion:       in.RubricVersion,
+		PolicyBundleVersion: in.PolicyBundleVersion,
+		PolicyBundleID:      policyBundleID,
+	})
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+	detectorResults := make([]ledger.DetectorResult, 0, len(in.DetectorResults))
+	for _, dr := range in.DetectorResults {
+		payload, err := json.Marshal(detectorResultPayload{Rationale: dr.Rationale})
+		if err != nil {
+			return core.Evaluation{}, err
+		}
+		confidence, err := numericFromFloatPtr(dr.Confidence)
+		if err != nil {
+			return core.Evaluation{}, err
+		}
+		score, err := numericFromFloatPtr(dr.Score)
+		if err != nil {
+			return core.Evaluation{}, err
+		}
+		if _, err := q.CreateDetectorResultRow(ctx, vigiaDB.CreateDetectorResultRowParams{
+			TenantID:           tenantUUID,
+			InteractionEventID: interactionUUID,
+			DetectorCode:       dr.DetectorCode,
+			Outcome:            string(dr.Outcome),
+			Severity:           string(dr.Severity),
+			ResultPayload:      payload,
+			EvaluationID:       pgtype.UUID{Bytes: header.ID.Bytes, Valid: true},
+			Confidence:         confidence,
+			Score:              score,
+		}); err != nil {
+			return core.Evaluation{}, err
+		}
+		detectorResults = append(detectorResults, ledger.DetectorResult{Code: dr.DetectorCode, Outcome: string(dr.Outcome), Severity: string(dr.Severity), Rationale: dr.Rationale})
+	}
+	head, err := q.LockChainHead(ctx, vigiaDB.LockChainHeadParams{TenantID: tenantUUID, LastHash: ledger.GenesisPrevHash})
+	if err != nil {
+		return core.Evaluation{}, err
+	}
+	seq := head.LastSeq + 1
+	prevHash := head.LastHash
+	createdAt := time.Now().UTC().Truncate(time.Microsecond)
+	body := ledger.Body{TenantID: in.TenantID, InteractionEventID: in.InteractionEventID, EvaluationID: uuidString(header.ID), Seq: seq, OverallOutcome: header.OverallOutcome, PolicyBundleVersion: header.PolicyBundleVersion, InputsDigest: ledger.ComputeInputsDigest(detectorResults), CreatedAt: createdAt}
+	var judgeRubricVersion, judgeModelID, judgeConfidence *string
+	if in.JudgeModelID != "" {
+		confidenceStr := ""
+		if in.JudgeConfidence != nil {
+			confidenceStr = strconv.FormatFloat(*in.JudgeConfidence, 'f', 4, 64)
+		}
+		body.Judge = &ledger.JudgeEvidence{RubricVersion: in.RubricVersion, JudgeModelID: in.JudgeModelID, Confidence: confidenceStr}
+		rubricVersion := in.RubricVersion
+		judgeModel := in.JudgeModelID
+		judgeRubricVersion = &rubricVersion
+		judgeModelID = &judgeModel
+		judgeConfidence = &confidenceStr
+	}
+	hash := ledger.Hash(prevHash, body)
+	if _, err := q.InsertEvidenceRecord(ctx, vigiaDB.InsertEvidenceRecordParams{TenantID: tenantUUID, InteractionEventID: interactionUUID, EvaluationID: pgtype.UUID{Bytes: header.ID.Bytes, Valid: true}, Seq: seq, PrevHash: prevHash, Hash: hash, OverallOutcome: body.OverallOutcome, PolicyBundleVersion: body.PolicyBundleVersion, InputsDigest: body.InputsDigest, CreatedAt: pgtype.Timestamptz{Time: createdAt, Valid: true}, JudgeRubricVersion: judgeRubricVersion, JudgeModelID: judgeModelID, JudgeConfidence: judgeConfidence}); err != nil {
+		return core.Evaluation{}, err
+	}
+	if err := q.UpdateChainHead(ctx, vigiaDB.UpdateChainHeadParams{TenantID: tenantUUID, LastSeq: seq, LastHash: hash}); err != nil {
+		return core.Evaluation{}, err
+	}
+	var resultPolicyBundleID *core.ID
+	if header.PolicyBundleID.Valid {
+		id := core.ID(uuidString(header.PolicyBundleID))
+		resultPolicyBundleID = &id
+	}
+	return core.Evaluation{ID: core.ID(uuidString(header.ID)), TenantID: core.ID(uuidString(header.TenantID)), InteractionEventID: core.ID(uuidString(header.InteractionEventID)), OverallOutcome: header.OverallOutcome, PolicyBundleVersion: header.PolicyBundleVersion, PolicyBundleID: resultPolicyBundleID, CreatedAt: header.CreatedAt.Time}, nil
+}
 
 // SummaryReader returns the tenant's out-of-hours (BLOCK) evaluation count
 // via a SQL aggregate, computed inside the tenant-scoped transaction so RLS
@@ -798,7 +892,19 @@ func (r *BundleResolverAdapter) ActiveBundle(ctx context.Context, tenantID strin
 	return version, id, found, nil
 }
 
+func (r *BundleResolverAdapter) ResolveActiveBundle(ctx context.Context, tenantID string) (outbound.ResolvedPolicyBundle, error) {
+	version, id, found, err := r.ActiveBundle(ctx, tenantID)
+	if err != nil {
+		return outbound.ResolvedPolicyBundle{}, err
+	}
+	if !found || version == "" {
+		return outbound.ResolvedPolicyBundle{}, outbound.ErrPolicyBundleNotFound
+	}
+	return outbound.ResolvedPolicyBundle{ID: id, Version: version}, nil
+}
+
 var _ evaluation.BundleResolver = (*BundleResolverAdapter)(nil)
+var _ outbound.ActiveBundleResolver = (*BundleResolverAdapter)(nil)
 
 // InteractionLookupAdapter resolves a stored interaction (and its
 // transcript, if any) by id for evaluation.Service.ReEvaluateInteraction,

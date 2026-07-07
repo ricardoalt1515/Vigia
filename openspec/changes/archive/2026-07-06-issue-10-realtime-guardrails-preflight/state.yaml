@@ -1,0 +1,39 @@
+# SDD Change State — Issue #10: Realtime Guardrails + Campaign Preflight Simulator
+change: issue-10-realtime-guardrails-preflight
+github_issue: 10
+title: "Realtime guardrails + campaign preflight simulator"
+created_at: "2026-07-06"
+artifact_store: openspec
+status: initialized
+
+phases:
+  propose: pending
+  spec: pending
+  design: pending
+  tasks: pending
+  apply: pending
+  verify: pending
+  archive: pending
+
+dependencies:
+  closed:
+    - "#16 Agent Harness Lab"
+    - "#6 Policy Bundle"
+    - "#4 LLM Judge Tone/Threat"
+  notes: >-
+    Builds on the permission-gate/event-log contract from #16, the policy engine
+    from #6, and the LLM judge tone/threat capability from #4.
+
+summary: >-
+  Graduate the sandboxed Agent Harness Lab (#16) into authority-bearing realtime
+  guardrails. Route proposed outbound agent utterances through the policy engine
+  before send, hard-blocking or rerouting violations of REDECO rules. Add a campaign
+  preflight simulator that validates scripts/templates/sequences against the ruleset
+  and flags violations before launch.
+
+acceptance_criteria:
+  - A threatening or out-of-hours outbound utterance is blocked before send.
+  - A blocked action is logged with the violated rule and reaches the evidence ledger.
+  - The preflight simulator flags a non-compliant campaign template prior to launch.
+  - A compliant utterance and campaign pass without blocking.
+  - Authority-bearing tools reuse the #16 permission-gate/event-log contract.

@@ -98,16 +98,25 @@ func (r Runtime) evaluateTool(ctx context.Context, call ToolCall, events *eventR
 	}
 
 	decision := r.Permissions.Decide(ctx, call)
-	events.add(EventPermissionDecision, map[string]any{"tool": call.Name, "decision": string(decision.Kind), "reason": decision.Reason})
+	events.add(EventPermissionDecision, eventDataWithMetadata(
+		map[string]any{"tool": call.Name, "decision": string(decision.Kind), "reason": decision.Reason},
+		decision.Metadata,
+	))
 
 	switch decision.Kind {
 	case PermissionDenied:
 		toolResult := ToolResult{Status: ToolStatusDenied, Reason: decision.Reason}
-		events.add(EventToolResult, map[string]any{"tool": call.Name, "status": string(toolResult.Status), "reason": toolResult.Reason})
+		events.add(EventToolResult, eventDataWithMetadata(
+			map[string]any{"tool": call.Name, "status": string(toolResult.Status), "reason": toolResult.Reason},
+			decision.Metadata,
+		))
 		return StepResult{Status: StepStatusPermissionDenied, ToolResult: toolResult, Events: events.events}, nil
 	case PermissionApprovalRequired:
 		toolResult := ToolResult{Status: ToolStatusApprovalRequired, Reason: decision.Reason}
-		events.add(EventToolResult, map[string]any{"tool": call.Name, "status": string(toolResult.Status), "reason": toolResult.Reason})
+		events.add(EventToolResult, eventDataWithMetadata(
+			map[string]any{"tool": call.Name, "status": string(toolResult.Status), "reason": toolResult.Reason},
+			decision.Metadata,
+		))
 		return StepResult{Status: StepStatusApprovalRequired, ToolResult: toolResult, Events: events.events}, nil
 	case PermissionAllowed:
 		// continue below
@@ -144,4 +153,17 @@ type eventRecorder struct {
 
 func (r *eventRecorder) add(typ EventType, data map[string]any) {
 	r.events = append(r.events, Event{Type: typ, Data: data})
+}
+
+func eventDataWithMetadata(data map[string]any, metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return data
+	}
+	for key, value := range metadata {
+		if _, reserved := data[key]; reserved {
+			continue
+		}
+		data[key] = value
+	}
+	return data
 }
