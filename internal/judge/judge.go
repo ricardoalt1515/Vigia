@@ -46,11 +46,15 @@ type JudgeInput struct {
 // determinism). RubricVersion/JudgeModelID are echoed so the caller records
 // exactly what produced the verdict.
 type JudgeResult struct {
-	Outcome       Outcome
-	Confidence    float64
-	Rationale     string
-	RubricVersion string
-	JudgeModelID  string
+	Outcome                  Outcome
+	Confidence               float64
+	Rationale                string
+	RubricVersion            string
+	JudgeModelID             string
+	InputTokens              int64
+	OutputTokens             int64
+	CacheReadInputTokens     int64
+	CacheCreationInputTokens int64
 }
 
 // Judge is the network-bound, fallible seam. Evaluate MUST honor ctx

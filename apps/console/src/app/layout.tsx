@@ -20,6 +20,9 @@ function NavBar() {
         <Link href="/dashboards/by-cause" className="hover:text-slate-900">
           By Cause
         </Link>
+        <Link href="/dashboards/cost-quality" className="hover:text-slate-900">
+          Cost & Quality
+        </Link>
       </div>
     </nav>
   );

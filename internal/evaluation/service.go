@@ -86,8 +86,12 @@ type CreateEvaluationInput struct {
 	// resolved active bundle's version string + FK id, stamped by
 	// EvaluateInteraction via Service.Resolver. Empty string/nil reproduce
 	// today's no-active-bundle sentinel exactly (Design Decision 3).
-	PolicyBundleVersion string
-	PolicyBundleID      *string
+	PolicyBundleVersion      string
+	PolicyBundleID           *string
+	JudgeInputTokens         int64
+	JudgeOutputTokens        int64
+	JudgeCacheReadTokens     int64
+	JudgeCacheCreationTokens int64
 }
 
 // BundleResolver resolves the current active PolicyBundle for a tenant.
@@ -213,16 +217,20 @@ func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteraction
 	policyBundleVersion, policyBundleID := s.resolveActiveBundle(ctx, in.TenantID)
 
 	return s.Store.CreateEvaluation(ctx, CreateEvaluationInput{
-		TenantID:            in.TenantID,
-		InteractionEventID:  in.InteractionEventID,
-		OverallOutcome:      run.overallOutcome,
-		DetectorResults:     run.results,
-		RequiresHITL:        run.requiresHITL,
-		JudgeModelID:        run.judgeModelID,
-		RubricVersion:       run.rubricVersion,
-		JudgeConfidence:     run.judgeConfidence,
-		PolicyBundleVersion: policyBundleVersion,
-		PolicyBundleID:      policyBundleID,
+		TenantID:                 in.TenantID,
+		InteractionEventID:       in.InteractionEventID,
+		OverallOutcome:           run.overallOutcome,
+		DetectorResults:          run.results,
+		RequiresHITL:             run.requiresHITL,
+		JudgeModelID:             run.judgeModelID,
+		RubricVersion:            run.rubricVersion,
+		JudgeConfidence:          run.judgeConfidence,
+		PolicyBundleVersion:      policyBundleVersion,
+		PolicyBundleID:           policyBundleID,
+		JudgeInputTokens:         run.judgeInputTokens,
+		JudgeOutputTokens:        run.judgeOutputTokens,
+		JudgeCacheReadTokens:     run.judgeCacheReadTokens,
+		JudgeCacheCreationTokens: run.judgeCacheCreationTokens,
 	})
 }
 
@@ -232,12 +240,16 @@ func (s Service) EvaluateInteraction(ctx context.Context, in EvaluateInteraction
 // ReEvaluateInteraction (which does not), so the two entry points can never
 // drift on outcome-folding logic.
 type detectorJudgeRun struct {
-	overallOutcome  string
-	results         []DetectorResultInput
-	requiresHITL    bool
-	judgeModelID    string
-	rubricVersion   string
-	judgeConfidence *float64
+	overallOutcome           string
+	results                  []DetectorResultInput
+	requiresHITL             bool
+	judgeModelID             string
+	rubricVersion            string
+	judgeConfidence          *float64
+	judgeInputTokens         int64
+	judgeOutputTokens        int64
+	judgeCacheReadTokens     int64
+	judgeCacheCreationTokens int64
 }
 
 // runDetectorsAndJudges runs every s.Detectors entry over interaction, then
@@ -304,6 +316,7 @@ func (s Service) runDetectorsAndJudges(ctx context.Context, interaction detectio
 
 	var judgeModelID, rubricVersion string
 	var judgeConfidence *float64
+	var judgeInputTokens, judgeOutputTokens, judgeCacheReadTokens, judgeCacheCreationTokens int64
 
 	for _, nj := range s.Judges {
 		res, err := nj.Judge.Evaluate(ctx, judge.JudgeInput{
@@ -317,6 +330,10 @@ func (s Service) runDetectorsAndJudges(ctx context.Context, interaction detectio
 		// failed).
 		judgeModelID = res.JudgeModelID
 		rubricVersion = res.RubricVersion
+		judgeInputTokens = res.InputTokens
+		judgeOutputTokens = res.OutputTokens
+		judgeCacheReadTokens = res.CacheReadInputTokens
+		judgeCacheCreationTokens = res.CacheCreationInputTokens
 		if err != nil {
 			requiresHITL = true
 			overallOutcome = "fail"
@@ -353,12 +370,16 @@ func (s Service) runDetectorsAndJudges(ctx context.Context, interaction detectio
 	}
 
 	return detectorJudgeRun{
-		overallOutcome:  overallOutcome,
-		results:         results,
-		requiresHITL:    requiresHITL,
-		judgeModelID:    judgeModelID,
-		rubricVersion:   rubricVersion,
-		judgeConfidence: judgeConfidence,
+		overallOutcome:           overallOutcome,
+		results:                  results,
+		requiresHITL:             requiresHITL,
+		judgeModelID:             judgeModelID,
+		rubricVersion:            rubricVersion,
+		judgeConfidence:          judgeConfidence,
+		judgeInputTokens:         judgeInputTokens,
+		judgeOutputTokens:        judgeOutputTokens,
+		judgeCacheReadTokens:     judgeCacheReadTokens,
+		judgeCacheCreationTokens: judgeCacheCreationTokens,
 	}
 }
 

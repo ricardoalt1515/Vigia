@@ -11,6 +11,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
+	"github.com/ricardoalt1515/vigia/internal/observability"
 )
 
 const (
@@ -79,18 +80,27 @@ func (a *AnthropicJudge) Evaluate(ctx context.Context, in JudgeInput) (JudgeResu
 		rubric = LoadRubric()
 	}
 
+	ctx, span := observability.StartJudgeSpan(ctx, a.modelID, rubric.Version)
+	defer span.End()
+
 	req := a.buildRequest(rubric, in.Utterances)
 
 	msg, err := a.client.Messages.New(ctx, req)
 	if err != nil {
 		wrapped := fmt.Errorf("%w: %v", ErrTransport, err)
 		attempted := JudgeResult{RubricVersion: rubric.Version, JudgeModelID: a.modelID}
+		observability.RecordJudgeResult(span, "", 0, 0, 0, 0, 0, wrapped)
 		a.logCall(start, rubric, attempted, 0, 0, wrapped)
 		return attempted, wrapped
 	}
 
 	result, err := a.mapResponse(msg, rubric)
-	a.logCall(start, rubric, result, msg.Usage.CacheReadInputTokens, msg.Usage.CacheCreationInputTokens, err)
+	result.InputTokens = msg.Usage.InputTokens
+	result.OutputTokens = msg.Usage.OutputTokens
+	result.CacheReadInputTokens = msg.Usage.CacheReadInputTokens
+	result.CacheCreationInputTokens = msg.Usage.CacheCreationInputTokens
+	observability.RecordJudgeResult(span, string(result.Outcome), result.Confidence, result.InputTokens, result.OutputTokens, result.CacheReadInputTokens, result.CacheCreationInputTokens, err)
+	a.logCall(start, rubric, result, result.CacheReadInputTokens, result.CacheCreationInputTokens, err)
 	return result, err
 }
 

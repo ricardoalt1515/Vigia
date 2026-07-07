@@ -7,3 +7,9 @@ RETURNING id, slug, name, status, created_at, updated_at;
 SELECT id, slug, name, status, created_at, updated_at
 FROM tenants
 WHERE slug = $1;
+
+-- name: ListActiveTenants :many
+SELECT id, slug, name, status, created_at, updated_at
+FROM tenants
+WHERE status = 'active'
+ORDER BY created_at ASC, id ASC;

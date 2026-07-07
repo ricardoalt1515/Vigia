@@ -133,16 +133,20 @@ type DetectorResultRow struct {
 }
 
 type Evaluation struct {
-	ID                  pgtype.UUID        `json:"id"`
-	TenantID            pgtype.UUID        `json:"tenant_id"`
-	InteractionEventID  pgtype.UUID        `json:"interaction_event_id"`
-	OverallOutcome      string             `json:"overall_outcome"`
-	PolicyBundleVersion string             `json:"policy_bundle_version"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	RequiresHitl        bool               `json:"requires_hitl"`
-	JudgeModelID        string             `json:"judge_model_id"`
-	RubricVersion       string             `json:"rubric_version"`
-	PolicyBundleID      pgtype.UUID        `json:"policy_bundle_id"`
+	ID                            pgtype.UUID        `json:"id"`
+	TenantID                      pgtype.UUID        `json:"tenant_id"`
+	InteractionEventID            pgtype.UUID        `json:"interaction_event_id"`
+	OverallOutcome                string             `json:"overall_outcome"`
+	PolicyBundleVersion           string             `json:"policy_bundle_version"`
+	CreatedAt                     pgtype.Timestamptz `json:"created_at"`
+	RequiresHitl                  bool               `json:"requires_hitl"`
+	JudgeModelID                  string             `json:"judge_model_id"`
+	RubricVersion                 string             `json:"rubric_version"`
+	PolicyBundleID                pgtype.UUID        `json:"policy_bundle_id"`
+	JudgeInputTokens              int64              `json:"judge_input_tokens"`
+	JudgeOutputTokens             int64              `json:"judge_output_tokens"`
+	JudgeCacheReadInputTokens     int64              `json:"judge_cache_read_input_tokens"`
+	JudgeCacheCreationInputTokens int64              `json:"judge_cache_creation_input_tokens"`
 }
 
 type EvidenceRecord struct {
@@ -219,6 +223,20 @@ type LedgerChainHead struct {
 	TenantID pgtype.UUID `json:"tenant_id"`
 	LastSeq  int64       `json:"last_seq"`
 	LastHash string      `json:"last_hash"`
+}
+
+type MerkleCheckpoint struct {
+	ID             pgtype.UUID        `json:"id"`
+	TenantID       pgtype.UUID        `json:"tenant_id"`
+	FirstSeq       int64              `json:"first_seq"`
+	LastSeq        int64              `json:"last_seq"`
+	RecordCount    int64              `json:"record_count"`
+	RootHash       string             `json:"root_hash"`
+	ChainHeadHash  string             `json:"chain_head_hash"`
+	CheckpointBody []byte             `json:"checkpoint_body"`
+	Rfc3161Token   []byte             `json:"rfc3161_token"`
+	TsaUrl         string             `json:"tsa_url"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
 type PolicyBundle struct {

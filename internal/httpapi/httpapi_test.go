@@ -608,12 +608,14 @@ func TestGetEvidence(t *testing.T) {
 // fakeSummaryReader's tenant-keyed map so a fake can prove tenant isolation
 // the same way the real RLS-scoped adapter does.
 type fakeDashboardReader struct {
-	byDespachoByTenant map[string][]DespachoRate
-	byCauseByTenant    map[string][]CauseCount
-	err                error
-	byDespachoCalls    int
-	byCauseCalls       int
-	lastTenantID       string
+	byDespachoByTenant  map[string][]DespachoRate
+	byCauseByTenant     map[string][]CauseCount
+	costQualityByTenant map[string]CostQualitySummary
+	err                 error
+	byDespachoCalls     int
+	byCauseCalls        int
+	costQualityCalls    int
+	lastTenantID        string
 }
 
 func (r *fakeDashboardReader) ByDespacho(_ context.Context, tenantID string) ([]DespachoRate, error) {
@@ -632,6 +634,15 @@ func (r *fakeDashboardReader) ByCause(_ context.Context, tenantID string) ([]Cau
 		return nil, r.err
 	}
 	return r.byCauseByTenant[tenantID], nil
+}
+
+func (r *fakeDashboardReader) CostQuality(_ context.Context, tenantID string) (CostQualitySummary, error) {
+	r.costQualityCalls++
+	r.lastTenantID = tenantID
+	if r.err != nil {
+		return CostQualitySummary{}, r.err
+	}
+	return r.costQualityByTenant[tenantID], nil
 }
 
 func TestGetDashboardByDespacho(t *testing.T) {
@@ -805,6 +816,52 @@ func (r *fakeReEvaluator) ReEvaluateInteraction(_ context.Context, _, interactio
 // a defined error status while creating no evaluation row (proven here by
 // the fake never persisting — ReEvaluateInteraction is non-persisting by
 // construction).
+func TestGetDashboardCostQuality(t *testing.T) {
+	fixedTime := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
+	store := &fakeKeyStore{records: map[string]auth.TenantAPIKey{
+		auth.HashAPIKey("tenant-a-key"): {ID: "key-a", TenantID: "tenant-a", KeyHash: auth.HashAPIKey("tenant-a-key"), Status: auth.StatusActive},
+		auth.HashAPIKey("tenant-b-key"): {ID: "key-b", TenantID: "tenant-b", KeyHash: auth.HashAPIKey("tenant-b-key"), Status: auth.StatusActive},
+	}}
+	dashboards := &fakeDashboardReader{costQualityByTenant: map[string]CostQualitySummary{
+		"tenant-a": {JudgedInteractions: 2, InputTokens: 1000, OutputTokens: 100, CacheReadInputTokens: 800, CacheCreationInputTokens: 50, BillableInputTokens: 200, HitlRequired: 1, FailedInteractions: 1, AverageConfidence: 0.875},
+		"tenant-b": {},
+	}}
+	handler := NewServer(auth.NewAuthenticator(store, func() time.Time { return fixedTime }), &fakeInteractionReader{}, &fakeSummaryReader{}, &fakeEvidenceReader{}, &fakeReEvaluator{}, dashboards, nil)
+
+	t.Run("returns tenant cost and quality summary", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/dashboards/cost-quality", nil)
+		req.Header.Set("Authorization", "Bearer tenant-a-key")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body %q", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var response costQualityResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if response.Summary.JudgedInteractions != 2 || response.Summary.BillableInputTokens != 200 || response.Summary.AverageConfidence != 0.875 {
+			t.Fatalf("summary = %#v", response.Summary)
+		}
+		if dashboards.lastTenantID != "tenant-a" {
+			t.Fatalf("tenant id = %q, want tenant-a", dashboards.lastTenantID)
+		}
+	})
+
+	t.Run("rejects unauthorized before reading summary", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/dashboards/cost-quality", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+	})
+}
+
 func TestReEvaluateInteraction(t *testing.T) {
 	fixedTime := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
 	store := &fakeKeyStore{

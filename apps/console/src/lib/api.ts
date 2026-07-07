@@ -190,3 +190,49 @@ export async function listByCause(): Promise<CauseCount[]> {
 
   return [];
 }
+
+export type CostQualitySummary = {
+  judged_interactions: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  billable_input_tokens: number;
+  hitl_required: number;
+  failed_interactions: number;
+  average_confidence: number;
+};
+
+export async function getCostQuality(): Promise<CostQualitySummary> {
+  const { base, key } = apiConfig();
+
+  const res = await fetch(`${base}/v1/dashboards/cost-quality`, {
+    headers: {
+      Authorization: `Bearer ${key}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `GET /v1/dashboards/cost-quality failed: ${res.status} ${res.statusText}`,
+    );
+  }
+
+  const body: unknown = await res.json();
+  if (body !== null && typeof body === "object" && "summary" in body) {
+    return (body as { summary: CostQualitySummary }).summary;
+  }
+
+  return {
+    judged_interactions: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+    billable_input_tokens: 0,
+    hitl_required: 0,
+    failed_interactions: 0,
+    average_confidence: 0,
+  };
+}
