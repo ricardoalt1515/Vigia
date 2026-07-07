@@ -54,3 +54,37 @@ func (q *Queries) GetTenantBySlug(ctx context.Context, slug string) (Tenant, err
 	)
 	return i, err
 }
+
+const listActiveTenants = `-- name: ListActiveTenants :many
+SELECT id, slug, name, status, created_at, updated_at
+FROM tenants
+WHERE status = 'active'
+ORDER BY created_at ASC, id ASC
+`
+
+func (q *Queries) ListActiveTenants(ctx context.Context) ([]Tenant, error) {
+	rows, err := q.db.Query(ctx, listActiveTenants)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Tenant
+	for rows.Next() {
+		var i Tenant
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

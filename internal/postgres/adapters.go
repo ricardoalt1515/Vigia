@@ -436,14 +436,18 @@ func createEvaluationWithLedger(ctx context.Context, q *vigiaDB.Queries, tenantU
 		}
 	}
 	header, err := q.CreateEvaluation(ctx, vigiaDB.CreateEvaluationParams{
-		TenantID:            tenantUUID,
-		InteractionEventID:  interactionUUID,
-		OverallOutcome:      in.OverallOutcome,
-		RequiresHitl:        in.RequiresHITL,
-		JudgeModelID:        in.JudgeModelID,
-		RubricVersion:       in.RubricVersion,
-		PolicyBundleVersion: in.PolicyBundleVersion,
-		PolicyBundleID:      policyBundleID,
+		TenantID:                      tenantUUID,
+		InteractionEventID:            interactionUUID,
+		OverallOutcome:                in.OverallOutcome,
+		RequiresHitl:                  in.RequiresHITL,
+		JudgeModelID:                  in.JudgeModelID,
+		RubricVersion:                 in.RubricVersion,
+		PolicyBundleVersion:           in.PolicyBundleVersion,
+		PolicyBundleID:                policyBundleID,
+		JudgeInputTokens:              in.JudgeInputTokens,
+		JudgeOutputTokens:             in.JudgeOutputTokens,
+		JudgeCacheReadInputTokens:     in.JudgeCacheReadTokens,
+		JudgeCacheCreationInputTokens: in.JudgeCacheCreationTokens,
 	})
 	if err != nil {
 		return core.Evaluation{}, err
@@ -629,6 +633,36 @@ func (r *DashboardReader) ByCause(ctx context.Context, tenantID string) ([]httpa
 		return nil, err
 	}
 	return items, nil
+}
+
+func (r *DashboardReader) CostQuality(ctx context.Context, tenantID string) (httpapi.CostQualitySummary, error) {
+	var summary httpapi.CostQualitySummary
+	err := tenantdb.WithTenantTx(ctx, r.db, tenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		row, err := vigiaDB.New(tx).DashboardCostQuality(ctx)
+		if err != nil {
+			return err
+		}
+		billableInput := row.InputTokens - row.CacheReadInputTokens
+		if billableInput < 0 {
+			billableInput = 0
+		}
+		summary = httpapi.CostQualitySummary{
+			JudgedInteractions:       row.JudgedInteractions,
+			InputTokens:              row.InputTokens,
+			OutputTokens:             row.OutputTokens,
+			CacheReadInputTokens:     row.CacheReadInputTokens,
+			CacheCreationInputTokens: row.CacheCreationInputTokens,
+			BillableInputTokens:      billableInput,
+			HitlRequired:             row.HitlRequired,
+			FailedInteractions:       row.FailedInteractions,
+			AverageConfidence:        row.AverageConfidence,
+		}
+		return nil
+	})
+	if err != nil {
+		return httpapi.CostQualitySummary{}, err
+	}
+	return summary, nil
 }
 
 var _ httpapi.DashboardReader = (*DashboardReader)(nil)

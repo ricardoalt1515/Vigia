@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/httpapi"
 	"github.com/ricardoalt1515/vigia/internal/judge"
+	"github.com/ricardoalt1515/vigia/internal/observability"
 	"github.com/ricardoalt1515/vigia/internal/outbound"
 	"github.com/ricardoalt1515/vigia/internal/postgres"
 
@@ -43,7 +45,16 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if cfg.AppDatabaseURL == "" {
+		return fmt.Errorf("APP_DATABASE_URL is required for cmd/api so authenticated endpoints run under the restricted app role")
+	}
+	shutdownTracing, err := observability.ConfigureTracing(ctx, cfg.OTLPTraceEndpoint)
+	if err != nil {
+		return err
+	}
+	defer shutdownTracing(context.Background())
+
+	pool, err := pgxpool.New(ctx, cfg.AppDatabaseURL)
 	if err != nil {
 		return err
 	}

@@ -255,3 +255,23 @@ func TestLoadKeepsBedrockAndAWSOptional(t *testing.T) {
 		t.Fatalf("BedrockModelID = %q, want empty when BEDROCK_MODEL_ID is absent", cfg.BedrockModelID)
 	}
 }
+func TestLoadRFC3161TSAURLIsOptional(t *testing.T) {
+	env := baseValidEnv()
+
+	cfg, err := Load(FromMap(env))
+	if err != nil {
+		t.Fatalf("Load returned unexpected error: %v", err)
+	}
+	if cfg.RFC3161TSAURL != "" {
+		t.Fatalf("RFC3161TSAURL = %q, want empty when unset", cfg.RFC3161TSAURL)
+	}
+
+	env["RFC3161_TSA_URL"] = "https://tsa.example.test"
+	cfg, err = Load(FromMap(env))
+	if err != nil {
+		t.Fatalf("Load returned unexpected error with TSA URL: %v", err)
+	}
+	if cfg.RFC3161TSAURL != "https://tsa.example.test" {
+		t.Fatalf("RFC3161TSAURL = %q, want configured URL", cfg.RFC3161TSAURL)
+	}
+}

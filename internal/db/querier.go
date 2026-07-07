@@ -57,6 +57,10 @@ type Querier interface {
 	// against the FROM-list instead and fails with "column ... does not exist"
 	// since no such source column exists.
 	DashboardByDespacho(ctx context.Context) ([]DashboardByDespachoRow, error)
+	// Tenant-scoped GenAI cost/quality summary. Token counts come from the judge
+	// response usage recorded on evaluations; quality comes from the judge row's
+	// confidence plus the evaluation outcome/HITL folding.
+	DashboardCostQuality(ctx context.Context) (DashboardCostQualityRow, error)
 	DeleteDespachoPenalizationsForPeriod(ctx context.Context, arg DeleteDespachoPenalizationsForPeriodParams) error
 	// Resolves THE active bundle for a tenant (Design Decision 3/4): today's
 	// BundleResolver seam resolves per-tenant only, with no bundle "name" input.
@@ -90,6 +94,9 @@ type Querier interface {
 	InsertComplaintTransitionEvidenceRecord(ctx context.Context, arg InsertComplaintTransitionEvidenceRecordParams) (EvidenceRecord, error)
 	InsertEvidenceRecord(ctx context.Context, arg InsertEvidenceRecordParams) (EvidenceRecord, error)
 	InsertHumanReview(ctx context.Context, arg InsertHumanReviewParams) (HumanReview, error)
+	InsertMerkleCheckpoint(ctx context.Context, arg InsertMerkleCheckpointParams) (MerkleCheckpoint, error)
+	LatestMerkleCheckpoint(ctx context.Context, tenantID pgtype.UUID) (MerkleCheckpoint, error)
+	ListActiveTenants(ctx context.Context) ([]Tenant, error)
 	ListBusinessDayHolidaysByVersion(ctx context.Context, calendarVersion string) ([]ListBusinessDayHolidaysByVersionRow, error)
 	ListCurrentTenantInteractions(ctx context.Context, limit int32) ([]ListCurrentTenantInteractionsRow, error)
 	// Issue #4 rewrite: aggregates across detector_result_rows per evaluation
@@ -107,8 +114,11 @@ type Querier interface {
 	ListDetectorResultRowsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListDetectorResultRowsByTenantRow, error)
 	// Store-backed VerifyChain: replay a tenant's chain ordered by seq.
 	ListEvidenceRecordsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]EvidenceRecord, error)
+	ListEvidenceRecordsByTenantAfterSeq(ctx context.Context, arg ListEvidenceRecordsByTenantAfterSeqParams) ([]EvidenceRecord, error)
+	ListEvidenceRecordsByTenantSeqRange(ctx context.Context, arg ListEvidenceRecordsByTenantSeqRangeParams) ([]EvidenceRecord, error)
 	ListExpiredReviewComplaintCases(ctx context.Context, arg ListExpiredReviewComplaintCasesParams) ([]ComplaintCase, error)
 	ListInteractionEventsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListInteractionEventsByTenantRow, error)
+	ListMerkleCheckpointsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]MerkleCheckpoint, error)
 	ListOpenComplaintCases(ctx context.Context, arg ListOpenComplaintCasesParams) ([]ComplaintCase, error)
 	ListPolicyBundleRulesByTenant(ctx context.Context, tenantID pgtype.UUID) ([]ListPolicyBundleRulesByTenantRow, error)
 	ListRedecoMonthlyReportEntries(ctx context.Context, arg ListRedecoMonthlyReportEntriesParams) ([]ListRedecoMonthlyReportEntriesRow, error)

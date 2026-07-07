@@ -90,12 +90,25 @@ type CauseCount struct {
 	Warnings   int64  `json:"warnings"`
 }
 
-// DashboardReader returns the two tenant-scoped compliance dashboards, both
-// computed as SQL aggregates (never client-side), following the same
-// tenantdb.WithTenantTx + RLS seam as SummaryReader.CountOutOfHours.
+type CostQualitySummary struct {
+	JudgedInteractions       int64   `json:"judged_interactions"`
+	InputTokens              int64   `json:"input_tokens"`
+	OutputTokens             int64   `json:"output_tokens"`
+	CacheReadInputTokens     int64   `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
+	BillableInputTokens      int64   `json:"billable_input_tokens"`
+	HitlRequired             int64   `json:"hitl_required"`
+	FailedInteractions       int64   `json:"failed_interactions"`
+	AverageConfidence        float64 `json:"average_confidence"`
+}
+
+// DashboardReader returns the tenant-scoped compliance and cost/quality
+// dashboards, computed as SQL aggregates (never client-side), following the
+// same tenantdb.WithTenantTx + RLS seam as SummaryReader.CountOutOfHours.
 type DashboardReader interface {
 	ByDespacho(ctx context.Context, tenantID string) ([]DespachoRate, error)
 	ByCause(ctx context.Context, tenantID string) ([]CauseCount, error)
+	CostQuality(ctx context.Context, tenantID string) (CostQualitySummary, error)
 }
 
 // ReEvaluator reruns the wired detectors/judge against a historical
@@ -177,6 +190,7 @@ func NewServer(authenticator *auth.Authenticator, interactions InteractionReader
 	s.mux.HandleFunc("POST /v1/interactions/{id}/reevaluate", s.handleReEvaluate)
 	s.mux.HandleFunc("GET /v1/dashboards/by-despacho", s.handleGetDashboardByDespacho)
 	s.mux.HandleFunc("GET /v1/dashboards/by-cause", s.handleGetDashboardByCause)
+	s.mux.HandleFunc("GET /v1/dashboards/cost-quality", s.handleGetDashboardCostQuality)
 	s.mux.HandleFunc("GET /v1/reports/redeco-monthly.csv", s.handleGetRedecoMonthlyReport)
 	s.mux.HandleFunc("POST /v1/complaints", s.handleCreateComplaint)
 	s.mux.HandleFunc("POST /v1/complaints/{id}/reviews", s.handleCreateComplaintReview)
@@ -738,6 +752,33 @@ func (s *Server) handleGetDashboardByCause(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(causeCountsResponse{Causes: counts}); err != nil {
+		return
+	}
+}
+
+type costQualityResponse struct {
+	Summary CostQualitySummary `json:"summary"`
+}
+
+func (s *Server) handleGetDashboardCostQuality(w http.ResponseWriter, r *http.Request) {
+	tenant, err := s.authenticator.Authenticate(r.Context(), r.Header.Get("Authorization"))
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized)
+			return
+		}
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	summary, err := s.dashboards.CostQuality(r.Context(), tenant.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(costQualityResponse{Summary: summary}); err != nil {
 		return
 	}
 }

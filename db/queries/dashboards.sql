@@ -52,3 +52,21 @@ SELECT
 FROM detector_result_rows
 GROUP BY detector_code
 ORDER BY detector_code ASC;
+
+-- name: DashboardCostQuality :one
+-- Tenant-scoped GenAI cost/quality summary. Token counts come from the judge
+-- response usage recorded on evaluations; quality comes from the judge row's
+-- confidence plus the evaluation outcome/HITL folding.
+SELECT
+    COUNT(*) FILTER (WHERE judge_model_id <> '') AS judged_interactions,
+    COALESCE(SUM(judge_input_tokens), 0)::bigint AS input_tokens,
+    COALESCE(SUM(judge_output_tokens), 0)::bigint AS output_tokens,
+    COALESCE(SUM(judge_cache_read_input_tokens), 0)::bigint AS cache_read_input_tokens,
+    COALESCE(SUM(judge_cache_creation_input_tokens), 0)::bigint AS cache_creation_input_tokens,
+    COUNT(*) FILTER (WHERE requires_hitl) AS hitl_required,
+    COUNT(*) FILTER (WHERE overall_outcome = 'fail') AS failed_interactions,
+    COALESCE(AVG(drr.confidence) FILTER (WHERE drr.confidence IS NOT NULL), 0)::float8 AS average_confidence
+FROM evaluations e
+LEFT JOIN detector_result_rows drr
+  ON drr.evaluation_id = e.id
+ AND drr.detector_code = 'MX-REDECO-05';

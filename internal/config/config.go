@@ -41,6 +41,7 @@ var validTranscriberModes = map[string]bool{
 type Config struct {
 	AppEnv         string
 	DatabaseURL    string
+	AppDatabaseURL string
 	ObjectStore    ObjectStoreConfig
 	AWSRegion      string
 	BedrockModelID string
@@ -57,6 +58,11 @@ type Config struct {
 	JudgeHITLConfidenceThreshold float64
 
 	Transcriber TranscriberConfig
+
+	// RFC3161TSAURL enables the ledger checkpoint worker. Empty means the worker
+	// is not registered, preserving local/test environments without a TSA.
+	RFC3161TSAURL     string
+	OTLPTraceEndpoint string
 }
 
 type TranscriberConfig struct {
@@ -69,7 +75,6 @@ type TranscriberConfig struct {
 	AWSTimeout      time.Duration
 	KeepProviderRaw bool
 }
-
 type ObjectStoreConfig struct {
 	Endpoint  string
 	AccessKey string
@@ -99,8 +104,9 @@ func Load(lookup LookupFunc) (Config, error) {
 	}
 
 	cfg := Config{
-		AppEnv:      required(lookup, "APP_ENV"),
-		DatabaseURL: required(lookup, "DATABASE_URL"),
+		AppEnv:         required(lookup, "APP_ENV"),
+		DatabaseURL:    required(lookup, "DATABASE_URL"),
+		AppDatabaseURL: optional(lookup, "APP_DATABASE_URL"),
 		ObjectStore: ObjectStoreConfig{
 			Endpoint:  required(lookup, "OBJECT_STORE_ENDPOINT"),
 			AccessKey: required(lookup, "OBJECT_STORE_ACCESS_KEY"),
@@ -111,9 +117,11 @@ func Load(lookup LookupFunc) (Config, error) {
 		AWSRegion:      optional(lookup, "AWS_REGION"),
 		BedrockModelID: optional(lookup, "BEDROCK_MODEL_ID"),
 
-		AnthropicAPIKey: optional(lookup, "ANTHROPIC_API_KEY"),
-		JudgeMode:       optional(lookup, "JUDGE_MODE"),
-		JudgeModelID:    optional(lookup, "JUDGE_MODEL_ID"),
+		AnthropicAPIKey:   optional(lookup, "ANTHROPIC_API_KEY"),
+		JudgeMode:         optional(lookup, "JUDGE_MODE"),
+		JudgeModelID:      optional(lookup, "JUDGE_MODEL_ID"),
+		RFC3161TSAURL:     optional(lookup, "RFC3161_TSA_URL"),
+		OTLPTraceEndpoint: optional(lookup, "OTEL_EXPORTER_OTLP_ENDPOINT"),
 		Transcriber: TranscriberConfig{
 			Mode:            optional(lookup, "TRANSCRIBER_MODE"),
 			LanguageCode:    optional(lookup, "TRANSCRIBER_LANGUAGE_CODE"),
