@@ -1,0 +1,14 @@
+{
+  "fixtures": [
+    {
+      "id": "mx-collections-001",
+      "audio_uri": "fixture://mx-collections-001",
+      "language": "es-MX",
+      "description": "Synthetic es-MX collection call reference; no real customer audio.",
+      "reference": [
+        { "speaker": "agent", "text": "Buenas tardes, llamo para confirmar un convenio de pago." },
+        { "speaker": "customer", "text": "Puedo pagar el viernes por la mañana." }
+      ]
+    }
+  ]
+}
