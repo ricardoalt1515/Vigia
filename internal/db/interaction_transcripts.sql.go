@@ -24,7 +24,7 @@ INSERT INTO interaction_transcripts (
     provider_request_id,
     metadata
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::jsonb, '{}'::jsonb))
 RETURNING id, tenant_id, interaction_event_id, utterances, created_at, provider, adapter, service, language_code, provider_job_id, provider_request_id, metadata
 `
 

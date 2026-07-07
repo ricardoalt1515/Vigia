@@ -8,13 +8,10 @@ ALTER TABLE interaction_transcripts
     ADD COLUMN provider_job_id text NOT NULL DEFAULT '',
     ADD COLUMN provider_request_id text NOT NULL DEFAULT '',
     ADD COLUMN metadata jsonb NOT NULL DEFAULT '{}'::jsonb;
-
-GRANT INSERT ON interaction_transcripts TO vigia_app;
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
-REVOKE INSERT ON interaction_transcripts FROM vigia_app;
 ALTER TABLE interaction_transcripts
     DROP COLUMN metadata,
     DROP COLUMN provider_request_id,
