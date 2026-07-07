@@ -12,19 +12,48 @@ import (
 )
 
 const createInteractionTranscript = `-- name: CreateInteractionTranscript :one
-INSERT INTO interaction_transcripts (tenant_id, interaction_event_id, utterances)
-VALUES ($1, $2, $3)
-RETURNING id, tenant_id, interaction_event_id, utterances, created_at
+INSERT INTO interaction_transcripts (
+    tenant_id,
+    interaction_event_id,
+    utterances,
+    provider,
+    adapter,
+    service,
+    language_code,
+    provider_job_id,
+    provider_request_id,
+    metadata
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::jsonb, '{}'::jsonb))
+RETURNING id, tenant_id, interaction_event_id, utterances, created_at, provider, adapter, service, language_code, provider_job_id, provider_request_id, metadata
 `
 
 type CreateInteractionTranscriptParams struct {
 	TenantID           pgtype.UUID `json:"tenant_id"`
 	InteractionEventID pgtype.UUID `json:"interaction_event_id"`
 	Utterances         []byte      `json:"utterances"`
+	Provider           string      `json:"provider"`
+	Adapter            string      `json:"adapter"`
+	Service            string      `json:"service"`
+	LanguageCode       string      `json:"language_code"`
+	ProviderJobID      string      `json:"provider_job_id"`
+	ProviderRequestID  string      `json:"provider_request_id"`
+	Metadata           []byte      `json:"metadata"`
 }
 
 func (q *Queries) CreateInteractionTranscript(ctx context.Context, arg CreateInteractionTranscriptParams) (InteractionTranscript, error) {
-	row := q.db.QueryRow(ctx, createInteractionTranscript, arg.TenantID, arg.InteractionEventID, arg.Utterances)
+	row := q.db.QueryRow(ctx, createInteractionTranscript,
+		arg.TenantID,
+		arg.InteractionEventID,
+		arg.Utterances,
+		arg.Provider,
+		arg.Adapter,
+		arg.Service,
+		arg.LanguageCode,
+		arg.ProviderJobID,
+		arg.ProviderRequestID,
+		arg.Metadata,
+	)
 	var i InteractionTranscript
 	err := row.Scan(
 		&i.ID,
@@ -32,12 +61,19 @@ func (q *Queries) CreateInteractionTranscript(ctx context.Context, arg CreateInt
 		&i.InteractionEventID,
 		&i.Utterances,
 		&i.CreatedAt,
+		&i.Provider,
+		&i.Adapter,
+		&i.Service,
+		&i.LanguageCode,
+		&i.ProviderJobID,
+		&i.ProviderRequestID,
+		&i.Metadata,
 	)
 	return i, err
 }
 
 const getInteractionTranscriptByInteraction = `-- name: GetInteractionTranscriptByInteraction :one
-SELECT id, tenant_id, interaction_event_id, utterances, created_at
+SELECT id, tenant_id, interaction_event_id, utterances, created_at, provider, adapter, service, language_code, provider_job_id, provider_request_id, metadata
 FROM interaction_transcripts
 WHERE tenant_id = $1 AND interaction_event_id = $2
 `
@@ -56,6 +92,13 @@ func (q *Queries) GetInteractionTranscriptByInteraction(ctx context.Context, arg
 		&i.InteractionEventID,
 		&i.Utterances,
 		&i.CreatedAt,
+		&i.Provider,
+		&i.Adapter,
+		&i.Service,
+		&i.LanguageCode,
+		&i.ProviderJobID,
+		&i.ProviderRequestID,
+		&i.Metadata,
 	)
 	return i, err
 }

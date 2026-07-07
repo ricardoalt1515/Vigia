@@ -206,6 +206,13 @@ type InteractionTranscript struct {
 	InteractionEventID pgtype.UUID        `json:"interaction_event_id"`
 	Utterances         []byte             `json:"utterances"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	Provider           string             `json:"provider"`
+	Adapter            string             `json:"adapter"`
+	Service            string             `json:"service"`
+	LanguageCode       string             `json:"language_code"`
+	ProviderJobID      string             `json:"provider_job_id"`
+	ProviderRequestID  string             `json:"provider_request_id"`
+	Metadata           []byte             `json:"metadata"`
 }
 
 type LedgerChainHead struct {

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type LookupFunc func(key string) (string, bool)
@@ -31,6 +32,12 @@ var validJudgeModes = map[string]bool{
 	"anthropic": true,
 }
 
+var validTranscriberModes = map[string]bool{
+	"fake":                        true,
+	"aws-bedrock-data-automation": true,
+	"aws-transcribe":              true,
+}
+
 type Config struct {
 	AppEnv         string
 	DatabaseURL    string
@@ -48,6 +55,19 @@ type Config struct {
 	// JudgeHITLConfidenceThreshold routes a judge verdict to requires_hitl
 	// when its confidence is below this value, in [0,1].
 	JudgeHITLConfidenceThreshold float64
+
+	Transcriber TranscriberConfig
+}
+
+type TranscriberConfig struct {
+	Mode            string
+	LanguageCode    string
+	AWSRegion       string
+	AWSInputBucket  string
+	AWSOutputBucket string
+	AWSPollInterval time.Duration
+	AWSTimeout      time.Duration
+	KeepProviderRaw bool
 }
 
 type ObjectStoreConfig struct {
@@ -94,6 +114,14 @@ func Load(lookup LookupFunc) (Config, error) {
 		AnthropicAPIKey: optional(lookup, "ANTHROPIC_API_KEY"),
 		JudgeMode:       optional(lookup, "JUDGE_MODE"),
 		JudgeModelID:    optional(lookup, "JUDGE_MODEL_ID"),
+		Transcriber: TranscriberConfig{
+			Mode:            optional(lookup, "TRANSCRIBER_MODE"),
+			LanguageCode:    optional(lookup, "TRANSCRIBER_LANGUAGE_CODE"),
+			AWSRegion:       optional(lookup, "TRANSCRIBER_AWS_REGION"),
+			AWSInputBucket:  optional(lookup, "TRANSCRIBER_AWS_INPUT_BUCKET"),
+			AWSOutputBucket: optional(lookup, "TRANSCRIBER_AWS_OUTPUT_BUCKET"),
+			KeepProviderRaw: boolOptional(lookup, "TRANSCRIBER_KEEP_PROVIDER_RAW"),
+		},
 	}
 
 	cfg.ObjectStore.UseSSL = strings.HasPrefix(strings.ToLower(cfg.ObjectStore.Endpoint), "https://")
@@ -103,6 +131,26 @@ func Load(lookup LookupFunc) (Config, error) {
 	}
 	if cfg.JudgeModelID == "" {
 		cfg.JudgeModelID = DefaultJudgeModelID
+	}
+	if cfg.Transcriber.Mode == "" {
+		cfg.Transcriber.Mode = "fake"
+	}
+	if cfg.Transcriber.LanguageCode == "" {
+		cfg.Transcriber.LanguageCode = "es-MX"
+	}
+	if cfg.Transcriber.AWSRegion == "" {
+		cfg.Transcriber.AWSRegion = optional(lookup, "AWS_REGION")
+	}
+
+	transcriberDurationMissing := []string{}
+	var err error
+	cfg.Transcriber.AWSPollInterval, err = durationOptional(lookup, "TRANSCRIBER_AWS_POLL_INTERVAL", 5*time.Second)
+	if err != nil {
+		transcriberDurationMissing = append(transcriberDurationMissing, "TRANSCRIBER_AWS_POLL_INTERVAL")
+	}
+	cfg.Transcriber.AWSTimeout, err = durationOptional(lookup, "TRANSCRIBER_AWS_TIMEOUT", 10*time.Minute)
+	if err != nil {
+		transcriberDurationMissing = append(transcriberDurationMissing, "TRANSCRIBER_AWS_TIMEOUT")
 	}
 
 	thresholdMissing := false
@@ -121,6 +169,16 @@ func Load(lookup LookupFunc) (Config, error) {
 	if !validJudgeModes[cfg.JudgeMode] {
 		missing = append(missing, "JUDGE_MODE")
 	}
+	if !validTranscriberModes[cfg.Transcriber.Mode] {
+		missing = append(missing, "TRANSCRIBER_MODE")
+	}
+	if strings.HasPrefix(cfg.Transcriber.Mode, "aws-") && cfg.Transcriber.AWSRegion == "" {
+		missing = append(missing, "TRANSCRIBER_AWS_REGION")
+	}
+	if cfg.Transcriber.Mode == "aws-transcribe" && cfg.Transcriber.AWSOutputBucket == "" {
+		missing = append(missing, "TRANSCRIBER_AWS_OUTPUT_BUCKET")
+	}
+	missing = append(missing, transcriberDurationMissing...)
 	if cfg.JudgeMode == "anthropic" && cfg.AnthropicAPIKey == "" {
 		missing = append(missing, "ANTHROPIC_API_KEY")
 	}
@@ -177,6 +235,24 @@ func optional(lookup LookupFunc, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+func boolOptional(lookup LookupFunc, key string) bool {
+	value := optional(lookup, key)
+	parsed, err := strconv.ParseBool(value)
+	return err == nil && parsed
+}
+
+func durationOptional(lookup LookupFunc, key string, defaultValue time.Duration) (time.Duration, error) {
+	value := optional(lookup, key)
+	if value == "" {
+		return defaultValue, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, err
+	}
+	return parsed, nil
 }
 
 func isURL(value string) bool {

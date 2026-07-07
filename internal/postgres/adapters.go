@@ -18,6 +18,7 @@ import (
 	"github.com/ricardoalt1515/vigia/internal/detection"
 	"github.com/ricardoalt1515/vigia/internal/evaluation"
 	"github.com/ricardoalt1515/vigia/internal/httpapi"
+	"github.com/ricardoalt1515/vigia/internal/ingestion"
 	"github.com/ricardoalt1515/vigia/internal/judge"
 	"github.com/ricardoalt1515/vigia/internal/ledger"
 	"github.com/ricardoalt1515/vigia/internal/outbound"
@@ -1190,3 +1191,54 @@ func (s *PolicyBundleStore) CreateBundleVersion(ctx context.Context, tenantID, n
 	}
 	return result, nil
 }
+
+// TranscriptStore persists voice-ingestion transcripts through the existing
+// interaction_transcripts path so re-evaluation can replay the same utterances.
+type TranscriptStore struct {
+	db tenantdb.Beginner
+}
+
+func NewTranscriptStore(db tenantdb.Beginner) *TranscriptStore {
+	return &TranscriptStore{db: db}
+}
+
+func NewTranscriptStoreFromPool(pool *pgxpool.Pool) *TranscriptStore {
+	return NewTranscriptStore(poolBeginner{pool: pool})
+}
+
+func (s *TranscriptStore) SaveTranscript(ctx context.Context, in ingestion.SaveTranscriptInput) error {
+	tenantUUID, err := parseUUID(in.TenantID)
+	if err != nil {
+		return err
+	}
+	interactionUUID, err := parseUUID(in.InteractionEventID)
+	if err != nil {
+		return err
+	}
+	utterances, err := json.Marshal(in.Utterances)
+	if err != nil {
+		return err
+	}
+	metadata, err := json.Marshal(in.Transcription.Metadata)
+	if err != nil {
+		return err
+	}
+
+	return tenantdb.WithTenantTx(ctx, s.db, in.TenantID, func(ctx context.Context, tx tenantdb.Tx) error {
+		_, err := vigiaDB.New(tx).CreateInteractionTranscript(ctx, vigiaDB.CreateInteractionTranscriptParams{
+			TenantID:           tenantUUID,
+			InteractionEventID: interactionUUID,
+			Utterances:         utterances,
+			Provider:           in.Transcription.Metadata.Provider,
+			Adapter:            in.Transcription.Metadata.Adapter,
+			Service:            in.Transcription.Metadata.Service,
+			LanguageCode:       in.Transcription.Metadata.LanguageCode,
+			ProviderJobID:      in.Transcription.Metadata.JobName,
+			ProviderRequestID:  in.Transcription.Metadata.RequestID,
+			Metadata:           metadata,
+		})
+		return err
+	})
+}
+
+var _ ingestion.TranscriptStore = (*TranscriptStore)(nil)

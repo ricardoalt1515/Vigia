@@ -1,0 +1,55 @@
+change: issue-11-voice-transcriber
+issue: 11
+title: Voice pipeline Transcriber and STT evaluation
+artifact_store: openspec
+status: verify-complete
+initialized: true
+updated_at: 2026-07-07
+workspace: /Users/ricardoaltamirano/Developer/vigia-issue-11
+phases:
+  exploration:
+    status: not-run
+    required: false
+  proposal:
+    status: complete
+    artifact: openspec/changes/issue-11-voice-transcriber/proposal.md
+  spec:
+    status: complete
+    artifact: openspec/changes/issue-11-voice-transcriber/specs/voice-transcription-ingestion/spec.md
+    depends_on:
+      - proposal
+  design:
+    status: complete
+    artifact: openspec/changes/issue-11-voice-transcriber/design.md
+    depends_on:
+      - proposal
+  tasks:
+    status: complete
+    artifact: openspec/changes/issue-11-voice-transcriber/tasks.md
+    depends_on:
+      - spec
+      - design
+  apply:
+    status: complete
+    artifact: openspec/changes/issue-11-voice-transcriber/apply-progress.md
+    depends_on:
+      - tasks
+  verify:
+    status: complete
+    artifact: openspec/changes/issue-11-voice-transcriber/verify-report.md
+    depends_on:
+      - apply
+  archive:
+    status: ready
+    depends_on:
+      - verify
+notes:
+  - AWS-first STT replaces the original Whisper-default expectation.
+  - Do not use OpenAI, Deepgram, or AI SDK for this slice.
+  - FakeTranscriber is required for deterministic tests and CI.
+  - Config changes may overlap concurrent issue #10; keep them additive and narrow.
+  - Design recommends chained PRs because the full implementation likely exceeds the 400-line review budget.
+  - Verify blocker remediated: AWS Transcribe now has a concrete AWS SDK-backed client and production constructor behind the awstranscribe.Client seam.
+  - Verify passed with warnings about large single-PR size, missing live DB integration coverage for transcript metadata, and limited direct unit coverage of AWS SDK internals.
+  - Post-archive 4R blocker remediated: TRANSCRIBER_AWS_TIMEOUT now maps to awstranscribe.Config.Timeout and Adapter.Transcribe enforces it with no fabricated utterances.
+next_recommended: archive
